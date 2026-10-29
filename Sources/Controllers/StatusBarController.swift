@@ -20,11 +20,24 @@ public final class StatusBarController: NSObject, NSMenuDelegate {
             }
         }
 
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleEngineStateNotification),
+            name: NSNotification.Name("WallpaperEngineStateChanged"),
+            object: nil
+        )
+
         libraryService.startWatching { [weak self] in
             DispatchQueue.main.async {
                 print("[StatusBarController] Detected Backdrop folder changes, refreshing...")
                 self?.loadWallpapers()
             }
+        }
+    }
+
+    @objc private func handleEngineStateNotification() {
+        DispatchQueue.main.async {
+            self.rebuildMenu()
         }
     }
 
@@ -51,22 +64,37 @@ public final class StatusBarController: NSObject, NSMenuDelegate {
     public func loadWallpapers() {
         cachedWallpapers = libraryService.fetchWallpapers()
         print("[StatusBarController] Loaded \(cachedWallpapers.count) wallpapers from library")
-        for item in cachedWallpapers {
-            print("  - [\(item.type.rawValue)] \(item.title) (\(item.id)) -> \(item.fileURL.path)")
-        }
         rebuildMenu()
 
-        // If no wallpaper is active yet, try restoring last used or pick the first
-        if engine.currentWallpaper == nil {
-            let lastPath = UserDefaults.standard.string(forKey: "WallpaperEngine.lastWallpaperPath")
-            let lastId = UserDefaults.standard.string(forKey: "WallpaperEngine.lastWallpaperId")
+        // 1. Restore or default Desktop wallpaper
+        if engine.currentDesktopWallpaper == nil {
+            let lastDesktopPath = UserDefaults.standard.string(forKey: "WallpaperEngine.desktopWallpaperPath") ??
+                UserDefaults.standard.string(forKey: "WallpaperEngine.lastWallpaperPath")
+            let lastDesktopId = UserDefaults.standard.string(forKey: "WallpaperEngine.desktopWallpaperId") ??
+                UserDefaults.standard.string(forKey: "WallpaperEngine.lastWallpaperId")
 
-            if let matched = cachedWallpapers.first(where: { $0.id == lastId || $0.fileURL.path == lastPath }) {
-                print("[StatusBarController] Restoring previously active wallpaper: \(matched.title)")
-                engine.setWallpaper(matched)
+            if let matched = cachedWallpapers.first(where: { $0.id == lastDesktopId || $0.fileURL.path == lastDesktopPath }) {
+                print("[StatusBarController] Restoring Desktop wallpaper: \(matched.title)")
+                engine.setDesktopWallpaper(matched)
+            } else if let kirby = cachedWallpapers.first(where: { $0.title.contains("Kirby") }) {
+                print("[StatusBarController] Defaulting Desktop to Kirby: \(kirby.title)")
+                engine.setDesktopWallpaper(kirby)
             } else if let first = cachedWallpapers.first {
-                print("[StatusBarController] Auto-selecting first available wallpaper: \(first.title)")
-                engine.setWallpaper(first)
+                engine.setDesktopWallpaper(first)
+            }
+        }
+
+        // 2. Restore or default Lock Screen wallpaper
+        if engine.currentLockScreenWallpaper == nil {
+            let lastLockPath = UserDefaults.standard.string(forKey: "WallpaperEngine.lockScreenWallpaperPath")
+            let lastLockId = UserDefaults.standard.string(forKey: "WallpaperEngine.lockScreenWallpaperId")
+
+            if let matched = cachedWallpapers.first(where: { $0.id == lastLockId || $0.fileURL.path == lastLockPath }) {
+                print("[StatusBarController] Restoring Lock Screen wallpaper: \(matched.title)")
+                engine.setLockScreenWallpaper(matched)
+            } else if let toads = cachedWallpapers.first(where: { $0.title.contains("Toad") }) {
+                print("[StatusBarController] Defaulting Lock Screen to Abi Toads: \(toads.title)")
+                engine.setLockScreenWallpaper(toads)
             }
         }
     }
@@ -93,24 +121,25 @@ public final class StatusBarController: NSObject, NSMenuDelegate {
         titleItem.isEnabled = false
         menu.addItem(titleItem)
 
-        if let current = engine.currentWallpaper {
-            let statusText = engine.isPlaying
-                ? "🟢 Playing: \(current.title)"
-                : "⏸️ Paused: \(current.title)"
-            let statusMenuItem = NSMenuItem(title: statusText, action: nil, keyEquivalent: "")
-            statusMenuItem.isEnabled = false
-            menu.addItem(statusMenuItem)
-        } else {
-            let statusMenuItem = NSMenuItem(title: "⚪ No wallpaper selected", action: nil, keyEquivalent: "")
-            statusMenuItem.isEnabled = false
-            menu.addItem(statusMenuItem)
-        }
+        let desktopTitle = engine.currentDesktopWallpaper?.title ?? "None"
+        let lockTitle = engine.currentLockScreenWallpaper?.title ??
+            UserDefaults.standard.string(forKey: "WallpaperEngine.lockScreenWallpaperTitle") ??
+            "Abi Toads"
+
+        let desktopStatus = engine.isPlaying ? "🖥️ Desktop: \(desktopTitle)" : "⏸️ Desktop (Paused): \(desktopTitle)"
+        let desktopItem = NSMenuItem(title: desktopStatus, action: nil, keyEquivalent: "")
+        desktopItem.isEnabled = false
+        menu.addItem(desktopItem)
+
+        let lockItem = NSMenuItem(title: "🔒 Lock Screen: \(lockTitle)", action: nil, keyEquivalent: "")
+        lockItem.isEnabled = false
+        menu.addItem(lockItem)
 
         menu.addItem(NSMenuItem.separator())
 
-        // 2. Wallpaper Gallery Store
+        // 2. Wallpaper Gallery Store (Steam Workshop / Backdrop Hub)
         let galleryItem = NSMenuItem(
-            title: "Browse Wallpaper Gallery...",
+            title: "Browse Wallpaper Gallery & Workshop...",
             action: #selector(handleOpenGallery),
             keyEquivalent: "g"
         )
@@ -119,9 +148,9 @@ public final class StatusBarController: NSObject, NSMenuDelegate {
 
         menu.addItem(NSMenuItem.separator())
 
-        // 3. Backdrop Wallpapers List
+        // 3. Wallpapers List
         let backdropItems = cachedWallpapers.filter { !$0.isCustom }
-        let backdropHeader = NSMenuItem(title: "Backdrop Library (\(backdropItems.count))", action: nil, keyEquivalent: "")
+        let backdropHeader = NSMenuItem(title: "Downloaded Wallpapers (\(backdropItems.count))", action: nil, keyEquivalent: "")
         backdropHeader.isEnabled = false
         menu.addItem(backdropHeader)
 
@@ -132,22 +161,50 @@ public final class StatusBarController: NSObject, NSMenuDelegate {
         } else {
             for item in backdropItems {
                 let badge = item.type == .video ? "🎬" : "🖼️"
+                let isDesktop = engine.currentDesktopWallpaper?.id == item.id
+                let isLock = engine.currentLockScreenWallpaper?.id == item.id ||
+                    lockTitle.lowercased().contains(item.title.lowercased())
+
+                var markers: [String] = []
+                if isDesktop { markers.append("🖥️ Desktop") }
+                if isLock { markers.append("🔒 Lock") }
+                let markerSuffix = markers.isEmpty ? "" : "  [\(markers.joined(separator: ", "))]"
+
                 let menuItem = NSMenuItem(
-                    title: "\(badge)  \(item.title) (\(item.formattedSize))",
-                    action: #selector(handleSelectWallpaper(_:)),
+                    title: "\(badge)  \(item.title)\(markerSuffix)",
+                    action: #selector(handleSelectDesktopWallpaper(_:)),
                     keyEquivalent: ""
                 )
                 menuItem.target = self
                 menuItem.representedObject = item
 
-                if engine.currentWallpaper?.id == item.id {
+                if isDesktop {
                     menuItem.state = .on
                 }
+
+                // Submenu for choosing target
+                let sub = NSMenu()
+                let miDesktop = NSMenuItem(title: "Set as Desktop Wallpaper", action: #selector(handleSelectDesktopWallpaper(_:)), keyEquivalent: "")
+                miDesktop.target = self
+                miDesktop.representedObject = item
+                sub.addItem(miDesktop)
+
+                let miLock = NSMenuItem(title: "Set as Lock Screen Wallpaper", action: #selector(handleSelectLockScreenWallpaper(_:)), keyEquivalent: "")
+                miLock.target = self
+                miLock.representedObject = item
+                sub.addItem(miLock)
+
+                let miBoth = NSMenuItem(title: "Set as Both (Desktop + Lock Screen)", action: #selector(handleSelectBothWallpapers(_:)), keyEquivalent: "")
+                miBoth.target = self
+                miBoth.representedObject = item
+                sub.addItem(miBoth)
+
+                menuItem.submenu = sub
                 menu.addItem(menuItem)
             }
         }
 
-        // 3. Custom Wallpapers List
+        // Custom items
         let customItems = cachedWallpapers.filter { $0.isCustom }
         if !customItems.isEmpty {
             menu.addItem(NSMenuItem.separator())
@@ -157,17 +214,28 @@ public final class StatusBarController: NSObject, NSMenuDelegate {
 
             for item in customItems {
                 let badge = item.type == .video ? "🎬" : "🖼️"
+                let isDesktop = engine.currentDesktopWallpaper?.id == item.id
                 let menuItem = NSMenuItem(
                     title: "\(badge)  \(item.title)",
-                    action: #selector(handleSelectWallpaper(_:)),
+                    action: #selector(handleSelectDesktopWallpaper(_:)),
                     keyEquivalent: ""
                 )
                 menuItem.target = self
                 menuItem.representedObject = item
+                if isDesktop { menuItem.state = .on }
 
-                if engine.currentWallpaper?.id == item.id {
-                    menuItem.state = .on
-                }
+                let sub = NSMenu()
+                let miDesktop = NSMenuItem(title: "Set as Desktop", action: #selector(handleSelectDesktopWallpaper(_:)), keyEquivalent: "")
+                miDesktop.target = self
+                miDesktop.representedObject = item
+                sub.addItem(miDesktop)
+
+                let miLock = NSMenuItem(title: "Set as Lock Screen", action: #selector(handleSelectLockScreenWallpaper(_:)), keyEquivalent: "")
+                miLock.target = self
+                miLock.representedObject = item
+                sub.addItem(miLock)
+
+                menuItem.submenu = sub
                 menu.addItem(menuItem)
             }
         }
@@ -241,7 +309,7 @@ public final class StatusBarController: NSObject, NSMenuDelegate {
 
         // 6. Tools & Utilities
         let refreshItem = NSMenuItem(
-            title: "Refresh Backdrop Library",
+            title: "Refresh Library",
             action: #selector(handleRefreshLibrary),
             keyEquivalent: "r"
         )
@@ -249,7 +317,7 @@ public final class StatusBarController: NSObject, NSMenuDelegate {
         menu.addItem(refreshItem)
 
         let openAssetsItem = NSMenuItem(
-            title: "Reveal Assets in Finder",
+            title: "Reveal Wallpapers in Finder",
             action: #selector(handleOpenAssetsInFinder),
             keyEquivalent: ""
         )
@@ -274,9 +342,19 @@ public final class StatusBarController: NSObject, NSMenuDelegate {
         GalleryWindowController.shared.show()
     }
 
-    @objc private func handleSelectWallpaper(_ sender: NSMenuItem) {
+    @objc private func handleSelectDesktopWallpaper(_ sender: NSMenuItem) {
         guard let item = sender.representedObject as? WallpaperItem else { return }
-        engine.setWallpaper(item)
+        engine.setDesktopWallpaper(item)
+    }
+
+    @objc private func handleSelectLockScreenWallpaper(_ sender: NSMenuItem) {
+        guard let item = sender.representedObject as? WallpaperItem else { return }
+        engine.setLockScreenWallpaper(item)
+    }
+
+    @objc private func handleSelectBothWallpapers(_ sender: NSMenuItem) {
+        guard let item = sender.representedObject as? WallpaperItem else { return }
+        engine.setBothWallpapers(item)
     }
 
     @objc private func handleChooseCustomWallpaper() {
@@ -295,13 +373,12 @@ public final class StatusBarController: NSObject, NSMenuDelegate {
         ]
         panel.message = "Choose a video or image to use as wallpaper"
 
-        // Temporarily bring app to front for file dialog
         NSApp.activate(ignoringOtherApps: true)
 
         if panel.runModal() == .OK, let selectedURL = panel.url {
             if let item = libraryService.addCustomWallpaper(url: selectedURL) {
                 loadWallpapers()
-                engine.setWallpaper(item)
+                engine.setDesktopWallpaper(item)
             }
         }
     }
@@ -329,7 +406,7 @@ public final class StatusBarController: NSObject, NSMenuDelegate {
     }
 
     @objc private func handleOpenAssetsInFinder() {
-        NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: libraryService.defaultAssetsDirectory.path)
+        NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: libraryService.localWallpapersDirectory.path)
     }
 
     @objc private func handleQuit() {

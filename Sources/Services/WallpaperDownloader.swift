@@ -4,10 +4,16 @@ import Combine
 public final class WallpaperDownloader: NSObject, ObservableObject, URLSessionDownloadDelegate {
     public static let shared = WallpaperDownloader()
 
+    public enum ApplyTarget {
+        case desktop
+        case lockScreen
+        case both
+    }
+
     @Published public var downloadProgress: [String: Double] = [:]
     @Published public var downloadStatus: [String: String] = [:]
 
-    private var activeTasks: [Int: (item: CatalogItem, completion: (Bool) -> Void)] = [:]
+    private var activeTasks: [Int: (item: CatalogItem, target: ApplyTarget, completion: (Bool) -> Void)] = [:]
     private var session: URLSession!
 
     private override init() {
@@ -28,7 +34,11 @@ public final class WallpaperDownloader: NSObject, ObservableObject, URLSessionDo
             .appendingPathComponent("\(safeTitle).\(ext)")
     }
 
-    public func downloadAndApply(item: CatalogItem, autoApply: Bool = true, completion: @escaping (Bool) -> Void) {
+    public func downloadAndApply(
+        item: CatalogItem,
+        target: ApplyTarget = .desktop,
+        completion: @escaping (Bool) -> Void
+    ) {
         let dest = destinationURL(for: item)
 
         // Ensure wallpapers directory exists
@@ -37,7 +47,7 @@ public final class WallpaperDownloader: NSObject, ObservableObject, URLSessionDo
 
         // If already downloaded, just apply it
         if FileManager.default.fileExists(atPath: dest.path) {
-            applyDownloaded(item: item, fileURL: dest, autoApply: autoApply)
+            applyDownloaded(item: item, fileURL: dest, target: target)
             completion(true)
             return
         }
@@ -48,7 +58,7 @@ public final class WallpaperDownloader: NSObject, ObservableObject, URLSessionDo
                 do {
                     try FileManager.default.copyItem(at: item.downloadURL, to: dest)
                     DispatchQueue.main.async {
-                        self?.applyDownloaded(item: item, fileURL: dest, autoApply: autoApply)
+                        self?.applyDownloaded(item: item, fileURL: dest, target: target)
                         completion(true)
                     }
                 } catch {
@@ -66,7 +76,7 @@ public final class WallpaperDownloader: NSObject, ObservableObject, URLSessionDo
         downloadProgress[item.id] = 0.01
 
         let task = session.downloadTask(with: item.downloadURL)
-        activeTasks[task.taskIdentifier] = (item, completion)
+        activeTasks[task.taskIdentifier] = (item, target, completion)
         task.resume()
     }
 
@@ -109,7 +119,7 @@ public final class WallpaperDownloader: NSObject, ObservableObject, URLSessionDo
             DispatchQueue.main.async {
                 self.downloadProgress.removeValue(forKey: taskInfo.item.id)
                 self.downloadStatus.removeValue(forKey: taskInfo.item.id)
-                self.applyDownloaded(item: taskInfo.item, fileURL: dest, autoApply: true)
+                self.applyDownloaded(item: taskInfo.item, fileURL: dest, target: taskInfo.target)
                 taskInfo.completion(true)
             }
         } catch {
@@ -137,7 +147,7 @@ public final class WallpaperDownloader: NSObject, ObservableObject, URLSessionDo
         activeTasks.removeValue(forKey: task.taskIdentifier)
     }
 
-    private func applyDownloaded(item: CatalogItem, fileURL: URL, autoApply: Bool) {
+    private func applyDownloaded(item: CatalogItem, fileURL: URL, target: ApplyTarget) {
         let size = (try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
         let wallpaper = WallpaperItem(
             id: "local-\(item.title)",
@@ -148,8 +158,13 @@ public final class WallpaperDownloader: NSObject, ObservableObject, URLSessionDo
             isCustom: false
         )
 
-        if autoApply {
-            WallpaperEngine.shared.setWallpaper(wallpaper)
+        switch target {
+        case .desktop:
+            WallpaperEngine.shared.setDesktopWallpaper(wallpaper)
+        case .lockScreen:
+            WallpaperEngine.shared.setLockScreenWallpaper(wallpaper)
+        case .both:
+            WallpaperEngine.shared.setBothWallpapers(wallpaper)
         }
     }
 }
