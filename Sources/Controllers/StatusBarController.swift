@@ -108,7 +108,18 @@ public final class StatusBarController: NSObject, NSMenuDelegate {
 
         menu.addItem(NSMenuItem.separator())
 
-        // 2. Backdrop Wallpapers List
+        // 2. Wallpaper Gallery Store
+        let galleryItem = NSMenuItem(
+            title: "Browse Wallpaper Gallery...",
+            action: #selector(handleOpenGallery),
+            keyEquivalent: "g"
+        )
+        galleryItem.target = self
+        menu.addItem(galleryItem)
+
+        menu.addItem(NSMenuItem.separator())
+
+        // 3. Backdrop Wallpapers List
         let backdropItems = cachedWallpapers.filter { !$0.isCustom }
         let backdropHeader = NSMenuItem(title: "Backdrop Library (\(backdropItems.count))", action: nil, keyEquivalent: "")
         backdropHeader.isEnabled = false
@@ -258,6 +269,10 @@ public final class StatusBarController: NSObject, NSMenuDelegate {
     }
 
     // MARK: - Actions
+
+    @objc private func handleOpenGallery() {
+        GalleryWindowController.shared.show()
+    }
 
     @objc private func handleSelectWallpaper(_ sender: NSMenuItem) {
         guard let item = sender.representedObject as? WallpaperItem else { return }
