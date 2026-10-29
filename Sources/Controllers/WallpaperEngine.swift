@@ -1,16 +1,18 @@
 import AppKit
 import AVFoundation
+import AVKit
 
 public enum WindowLayerMode: String, CaseIterable {
-    case behindIcons = "Behind Desktop Icons"
-    case desktopBase = "Desktop Base Layer"
+    case desktop = "Desktop Layer (Recommended)"
+    case belowIcons = "Below Desktop Icons"
 
     public var windowLevel: NSWindow.Level {
         switch self {
-        case .behindIcons:
+        case .desktop:
+            // Sits directly above system desktop wallpaper and any existing wallpaper renderer
+            return NSWindow.Level(Int(CGWindowLevelForKey(.desktopWindow)) + 2)
+        case .belowIcons:
             return NSWindow.Level(Int(CGWindowLevelForKey(.desktopIconWindow)) - 1)
-        case .desktopBase:
-            return NSWindow.Level(Int(CGWindowLevelForKey(.desktopWindow)))
         }
     }
 }
@@ -26,28 +28,6 @@ public enum WallpaperScalingMode: String, CaseIterable {
         case .aspectFit:
             return .resizeAspect
         }
-    }
-}
-
-final class PlayerView: NSView {
-    var playerLayer: AVPlayerLayer {
-        return layer as! AVPlayerLayer
-    }
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        self.wantsLayer = true
-    }
-
-    required init?(coder: NSCoder) {
-        super.init(coder: coder)
-        self.wantsLayer = true
-    }
-
-    override func makeBackingLayer() -> CALayer {
-        let l = AVPlayerLayer()
-        l.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
-        return l
     }
 }
 
@@ -68,7 +48,7 @@ public final class WallpaperEngine: NSObject {
     public var layerMode: WindowLayerMode {
         get {
             let raw = UserDefaults.standard.string(forKey: "WallpaperEngine.layerMode") ?? ""
-            return WindowLayerMode(rawValue: raw) ?? .behindIcons
+            return WindowLayerMode(rawValue: raw) ?? .desktop
         }
         set {
             UserDefaults.standard.set(newValue.rawValue, forKey: "WallpaperEngine.layerMode")
@@ -94,7 +74,7 @@ public final class WallpaperEngine: NSObject {
         let window: WallpaperWindow
         var player: AVQueuePlayer?
         var looper: AVPlayerLooper?
-        var playerView: PlayerView?
+        var playerView: AVPlayerView?
         var imageView: NSImageView?
     }
 
@@ -159,6 +139,7 @@ public final class WallpaperEngine: NSObject {
     // MARK: - Playback Control
 
     public func setWallpaper(_ item: WallpaperItem) {
+        print("[WallpaperEngine] Setting wallpaper: \(item.title) (\(item.fileURL.lastPathComponent))")
         self.currentWallpaper = item
         self.isPlaying = true
 
@@ -172,6 +153,7 @@ public final class WallpaperEngine: NSObject {
             sessions.append(session)
         }
 
+        print("[WallpaperEngine] Active sessions: \(sessions.count)")
         onStateChange?()
     }
 
@@ -228,9 +210,11 @@ public final class WallpaperEngine: NSObject {
 
             let looper = AVPlayerLooper(player: queuePlayer, templateItem: playerItem)
 
-            let playerView = PlayerView(frame: NSRect(origin: .zero, size: screen.frame.size))
-            playerView.playerLayer.player = queuePlayer
-            playerView.playerLayer.videoGravity = scalingMode.avGravity
+            let playerView = AVPlayerView(frame: NSRect(origin: .zero, size: screen.frame.size))
+            playerView.player = queuePlayer
+            playerView.controlsStyle = .none
+            playerView.videoGravity = scalingMode.avGravity
+            playerView.autoresizingMask = [.width, .height]
 
             window.contentView = playerView
 
@@ -240,6 +224,7 @@ public final class WallpaperEngine: NSObject {
 
             if isPlaying && !isSystemSleeping {
                 queuePlayer.play()
+                print("[WallpaperEngine] Started queuePlayer playback on \(screen.localizedName), isMuted=\(isMuted)")
             }
         } else {
             let imageView = NSImageView(frame: NSRect(origin: .zero, size: screen.frame.size))
@@ -282,7 +267,7 @@ public final class WallpaperEngine: NSObject {
     private func updateScalingMode() {
         let gravity = scalingMode.avGravity
         for session in sessions {
-            session.playerView?.playerLayer.videoGravity = gravity
+            session.playerView?.videoGravity = gravity
             session.imageView?.imageScaling = (scalingMode == .aspectFill) ? .scaleAxesIndependently : .scaleProportionallyUpOrDown
         }
         onStateChange?()

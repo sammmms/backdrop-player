@@ -50,6 +50,10 @@ public final class StatusBarController: NSObject, NSMenuDelegate {
 
     public func loadWallpapers() {
         cachedWallpapers = libraryService.fetchWallpapers()
+        print("[StatusBarController] Loaded \(cachedWallpapers.count) wallpapers from library")
+        for item in cachedWallpapers {
+            print("  - [\(item.type.rawValue)] \(item.title) (\(item.id)) -> \(item.fileURL.path)")
+        }
         rebuildMenu()
 
         // If no wallpaper is active yet, try restoring last used or pick the first
@@ -58,8 +62,10 @@ public final class StatusBarController: NSObject, NSMenuDelegate {
             let lastId = UserDefaults.standard.string(forKey: "WallpaperEngine.lastWallpaperId")
 
             if let matched = cachedWallpapers.first(where: { $0.id == lastId || $0.fileURL.path == lastPath }) {
+                print("[StatusBarController] Restoring previously active wallpaper: \(matched.title)")
                 engine.setWallpaper(matched)
             } else if let first = cachedWallpapers.first {
+                print("[StatusBarController] Auto-selecting first available wallpaper: \(first.title)")
                 engine.setWallpaper(first)
             }
         }
