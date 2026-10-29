@@ -1,8 +1,12 @@
+<p align="center">
+  <img src="assets/banner.png" alt="Backdrop Player Banner" width="100%" />
+</p>
+
 # Backdrop Player (macOS)
 
-A high-performance, ultra-lightweight macOS menu bar application built natively in **Swift**, **AppKit**, and **AVFoundation** to render video and static wallpapers seamlessly on your Mac desktop.
+A high-performance, ultra-lightweight native macOS wallpaper engine and dynamic **Steam Workshop & Wallpaper Engine** client built with **Swift 6**, **AppKit**, **SwiftUI**, and **AVFoundation**.
 
-It directly discovers and plays downloaded wallpaper assets from the **Backdrop** app (`~/Library/Application Support/Backdrop/Library/Assets`), matching them to their human-friendly titles via Backdrop's SQLite database.
+Render 60fps hardware-accelerated animated video wallpapers smoothly on your macOS desktop while keeping your Lock Screen completely independent.
 
 ---
 
@@ -10,27 +14,26 @@ It directly discovers and plays downloaded wallpaper assets from the **Backdrop*
 
 - **⚡ Hardware-Accelerated & Ultra Low Overhead**:
   - Uses Apple's VideoToolbox via `AVQueuePlayer` and `AVPlayerLooper` for seamless 60/120fps video playback with `< 1% CPU` and minimal battery consumption.
-- **🖥️ True Desktop Layering**:
-  - Positions the wallpaper window directly behind your desktop icons (`desktopIconWindow - 1`), allowing you to interact with desktop files, select, drag, and open Finder right-click context menus uninterrupted.
-- **🌌 Mission Control / Spaces Support**:
-  - Persistent across all macOS Spaces and virtual desktops without flashing or hiding during space transitions.
-- **🔄 Auto-Discovery of Backdrop Assets**:
-  - Queries `Backdrop.sqlite` to display wallpapers by their real names (*"Kirby Floating on Pond"*, *"Room in the forest"*, *"Dancing Petals"*, *"Abi Toads"*).
-  - Watches the Backdrop assets directory for newly downloaded wallpapers and auto-refreshes in real-time.
-- **📂 Custom Wallpapers**:
-  - Choose and play any local `.mov`, `.mp4`, `.m4v`, or high-res `.heic` / `.png` / `.jpg` file via file picker.
+- **🔒 Decoupled Desktop & Lock Screen Engine**:
+  - Independently configure your macOS Lock Screen (e.g. *Abi Toads*) while simultaneously playing high-framerate dynamic video wallpapers on your desktop.
+  - Zero-CPU idle suspension: Automatically pauses video playback when your Mac locks (`com.apple.screenIsLocked`) and instantly resumes upon unlocking (`com.apple.screenIsUnlocked`).
+- **🌐 Live Steam Workshop & Wallpaper Engine Client**:
+  - Direct in-app Steam Workshop browser: Queries Steam Community live API data (`appid=431960`) with real-time SSR JSON parsing.
+  - Search any keyword (e.g., *toad*, *cyberpunk*, *porsche*, *anime*, *genshin*, *nature*) to stream real-time catalog results, CDN preview thumbnails, and subscriber counts without manual link copying.
+- **🖥️ True Desktop Window Layering**:
+  - Positions the wallpaper window directly at `kCGDesktopWindowLevel + 2` behind desktop icons, allowing full interaction with desktop files, selection rectangles, and Finder context menus.
+- **🌌 Mission Control & Spaces Persistence**:
+  - Stays sticky across all macOS virtual desktops and Spaces without flickering during transitions.
+- **🔄 Auto-Discovery & Local Sourcing**:
+  - Discovers clean local wallpapers and detects cached assets from the Backdrop app database (`Backdrop.sqlite`).
 - **🔋 Battery-Conscious Sleep Detection**:
-  - Automatically pauses playback when displays go to sleep and resumes immediately upon waking.
+  - Automatically pauses playback when displays sleep and resumes immediately upon wake.
 - **🖥️ Multi-Display Support**:
-  - Dynamically creates independent rendering sessions for every attached display and adapts automatically when displays are plugged/unplugged or resolutions change.
-- **🎛️ Menu Bar Controls**:
-  - **Browse Wallpaper Gallery...** (`⌘G`) — Open the built-in gallery & download store.
-  - Quick 1-click wallpaper switcher.
-  - Play / Pause toggle (`⌘P`).
-  - Mute / Unmute audio toggle (`⌘M`).
-  - Scaling modes (Fill Screen / Crop vs. Fit Screen / Letterbox).
-  - Desktop layer modes (Desktop Layer vs. Below Desktop Icons).
-  - Open Backdrop Assets folder directly in Finder.
+  - Independent playback sessions for every connected display with automatic resolution adapting.
+- **🎛️ Menu Bar & 1-Click Controls**:
+  - **Browse Wallpaper Gallery & Workshop...** (`⌘G`)
+  - 1-Click **Set Desktop**, **Set Lock**, or **Set Both** directly from cards.
+  - Play / Pause (`⌘P`), Mute / Unmute (`⌘M`), Scaling modes (Fill vs Fit).
 
 ---
 
