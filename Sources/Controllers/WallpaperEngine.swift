@@ -78,13 +78,18 @@ public final class WallpaperEngine: NSObject {
         onStateChange?()
     }
 
-    private struct ScreenSession {
+    private final class ScreenSession {
         let screen: NSScreen
         let window: WallpaperWindow
         var player: AVQueuePlayer?
         var looper: AVPlayerLooper?
         var playerView: AVPlayerView?
         var imageView: NSImageView?
+
+        init(screen: NSScreen, window: WallpaperWindow) {
+            self.screen = screen
+            self.window = window
+        }
     }
 
     private var sessions: [ScreenSession] = []
@@ -184,13 +189,31 @@ public final class WallpaperEngine: NSObject {
         UserDefaults.standard.set(item.id, forKey: "WallpaperEngine.desktopWallpaperId")
         UserDefaults.standard.set(item.title, forKey: "WallpaperEngine.desktopWallpaperTitle")
 
-        teardownSessions()
+        // Smoothly reuse existing windows or create new ones for new screens without destroying windows
+        var activeSessions: [ScreenSession] = []
+        let currentScreens = NSScreen.screens
 
-        for screen in NSScreen.screens {
-            let session = createSession(for: screen, item: item)
-            sessions.append(session)
+        for screen in currentScreens {
+            if let existing = sessions.first(where: { $0.screen == screen || $0.screen.frame == screen.frame }) {
+                updateSessionContent(session: existing, item: item)
+                activeSessions.append(existing)
+            } else {
+                let session = createSession(for: screen, item: item)
+                activeSessions.append(session)
+            }
         }
 
+        // Clean up removed screens (e.g. external display disconnected)
+        for oldSession in sessions {
+            if !currentScreens.contains(where: { $0 == oldSession.screen || $0.frame == oldSession.screen.frame }) {
+                oldSession.player?.pause()
+                oldSession.player?.removeAllItems()
+                oldSession.imageView?.animates = false
+                oldSession.window.orderOut(nil)
+            }
+        }
+
+        self.sessions = activeSessions
         print("[WallpaperEngine] Active desktop sessions: \(sessions.count)")
         notifyStateChange()
     }
@@ -351,7 +374,7 @@ public final class WallpaperEngine: NSObject {
 
     private func createSession(for screen: NSScreen, item: WallpaperItem) -> ScreenSession {
         let window = WallpaperWindow(screen: screen, level: layerMode.windowLevel)
-        var session = ScreenSession(screen: screen, window: window)
+        let session = ScreenSession(screen: screen, window: window)
 
         if item.type == .video {
             let asset = AVURLAsset(url: item.fileURL)
@@ -391,11 +414,67 @@ public final class WallpaperEngine: NSObject {
         return session
     }
 
+    private func updateSessionContent(session: ScreenSession, item: WallpaperItem) {
+        // 1. Clean up existing media safely
+        session.player?.pause()
+        session.player?.removeAllItems()
+        session.looper = nil
+        session.player = nil
+        session.playerView = nil
+        session.imageView?.animates = false
+        session.imageView?.image = nil
+        session.imageView = nil
+
+        // 2. Setup new media on the existing persistent window
+        if item.type == .video {
+            let asset = AVURLAsset(url: item.fileURL)
+            let playerItem = AVPlayerItem(asset: asset)
+            let queuePlayer = AVQueuePlayer(playerItem: playerItem)
+            queuePlayer.isMuted = isMuted
+
+            let looper = AVPlayerLooper(player: queuePlayer, templateItem: playerItem)
+
+            let playerView = AVPlayerView(frame: NSRect(origin: .zero, size: session.screen.frame.size))
+            playerView.player = queuePlayer
+            playerView.controlsStyle = .none
+            playerView.videoGravity = scalingMode.avGravity
+            playerView.autoresizingMask = [.width, .height]
+
+            session.window.contentView = playerView
+
+            session.player = queuePlayer
+            session.looper = looper
+            session.playerView = playerView
+
+            if isPlaying && !isSystemSleeping {
+                queuePlayer.play()
+                print("[WallpaperEngine] Swapped video playback on \(session.screen.localizedName) to: \(item.title)")
+            }
+        } else {
+            let imageView = NSImageView(frame: NSRect(origin: .zero, size: session.screen.frame.size))
+            imageView.image = NSImage(contentsOf: item.fileURL)
+            imageView.animates = true
+            imageView.imageScaling = (scalingMode == .aspectFill) ? .scaleAxesIndependently : .scaleProportionallyUpOrDown
+            imageView.autoresizingMask = [.width, .height]
+            session.window.contentView = imageView
+            session.imageView = imageView
+            print("[WallpaperEngine] Swapped image display on \(session.screen.localizedName) to: \(item.title)")
+        }
+
+        session.window.orderFrontRegardless()
+    }
+
     private func teardownSessions() {
         for session in sessions {
             session.player?.pause()
-            session.window.contentView = nil
-            session.window.close()
+            session.player?.removeAllItems()
+            session.looper = nil
+            session.player = nil
+            session.playerView = nil
+            session.imageView?.animates = false
+            session.imageView?.image = nil
+            session.imageView = nil
+            session.window.orderOut(nil)
         }
         sessions.removeAll()
     }

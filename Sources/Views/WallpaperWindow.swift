@@ -15,6 +15,7 @@ public final class WallpaperWindow: NSWindow {
 
         self.setFrame(screen.frame, display: true)
         self.level = level
+        self.isReleasedWhenClosed = false
         self.collectionBehavior = [
             .canJoinAllSpaces,
             .stationary,

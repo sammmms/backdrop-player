@@ -41,6 +41,8 @@ public final class GalleryWindowController: NSWindowController, NSWindowDelegate
 
     public func windowWillClose(_ notification: Notification) {
         print("[GalleryWindowController] Gallery window closed, reverting to accessory mode.")
-        NSApp.setActivationPolicy(.accessory)
+        DispatchQueue.main.async {
+            NSApp.setActivationPolicy(.accessory)
+        }
     }
 }
