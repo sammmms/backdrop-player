@@ -12,12 +12,11 @@ public struct GalleryView: View {
 
     private let categories = [
         "All",
-        "Backdrop Cache (Instant)",
-        "4K Nature",
-        "4K Space & Earth",
-        "4K Cities",
+        "Backdrop Collection",
+        "Anime & Gaming",
+        "4K Nature & Space",
         "Lofi & Aesthetic",
-        "Direct URL"
+        "Quick URL Downloader"
     ]
 
     public init() {}
@@ -28,7 +27,7 @@ public struct GalleryView: View {
             categoryBar
             Divider()
 
-            if selectedCategory == "Direct URL" {
+            if selectedCategory == "Quick URL Downloader" {
                 directURLView
             } else {
                 galleryGrid
@@ -38,7 +37,7 @@ public struct GalleryView: View {
                 toastBanner(toast)
             }
         }
-        .frame(minWidth: 840, minHeight: 580)
+        .frame(minWidth: 880, minHeight: 620)
         .background(Color(NSColor.windowBackgroundColor))
         .onAppear {
             loadItems()
@@ -50,14 +49,14 @@ public struct GalleryView: View {
     private var headerView: some View {
         HStack(spacing: 14) {
             Image(systemName: "sparkles.tv")
-                .font(.system(size: 24, weight: .semibold))
+                .font(.system(size: 26, weight: .semibold))
                 .foregroundColor(.accentColor)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text("Wallpaper Gallery & Hub")
                     .font(.headline)
                     .fontWeight(.bold)
-                Text("Browse, download, and apply live 4K wallpapers directly to your Mac desktop.")
+                Text("Browse real previews, download 4K loops, and apply wallpapers with 1 click.")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
             }
@@ -116,9 +115,21 @@ public struct GalleryView: View {
 
     private var filteredItems: [CatalogItem] {
         items.filter { item in
-            let matchesCategory = (selectedCategory == "All") ||
-                (selectedCategory == "Backdrop Cache (Instant)" && item.isLocalCopy) ||
-                (item.category.contains(selectedCategory))
+            let matchesCategory: Bool
+            switch selectedCategory {
+            case "All":
+                matchesCategory = true
+            case "Backdrop Collection":
+                matchesCategory = item.isLocalCopy
+            case "Anime & Gaming":
+                matchesCategory = item.category.contains("Anime") || item.category.contains("Gaming")
+            case "4K Nature & Space":
+                matchesCategory = item.category.contains("4K") || item.category.contains("Nature") || item.category.contains("Space")
+            case "Lofi & Aesthetic":
+                matchesCategory = item.category.contains("Lofi") || item.category.contains("Aesthetic")
+            default:
+                matchesCategory = item.category.contains(selectedCategory)
+            }
 
             let matchesSearch = searchText.isEmpty ||
                 item.title.localizedCaseInsensitiveContains(searchText) ||
@@ -130,7 +141,7 @@ public struct GalleryView: View {
 
     private var galleryGrid: some View {
         ScrollView {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 250, maximum: 300), spacing: 16)], spacing: 16) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 260, maximum: 320), spacing: 16)], spacing: 16) {
                 ForEach(filteredItems) { item in
                     wallpaperCard(for: item)
                 }
@@ -148,28 +159,19 @@ public struct GalleryView: View {
         let status = downloader.downloadStatus[item.id]
 
         return VStack(alignment: .leading, spacing: 10) {
-            // Thumbnail / Icon banner
+            // Real Thumbnail Image Preview
             ZStack(alignment: .topTrailing) {
-                LinearGradient(
-                    gradient: Gradient(colors: gradientColors(for: item)),
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-                .frame(height: 120)
-                .cornerRadius(8)
-                .overlay(
-                    Image(systemName: iconForCategory(item.category))
-                        .font(.system(size: 38))
-                        .foregroundColor(.white.opacity(0.85))
-                )
+                ThumbnailImageView(item: item)
+                    .frame(height: 140)
+                    .cornerRadius(8)
 
-                // Badges
+                // Resolution & Size Badges
                 HStack(spacing: 4) {
                     Text(item.resolution)
                         .font(.system(size: 10, weight: .bold))
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
-                        .background(Color.black.opacity(0.6))
+                        .background(Color.black.opacity(0.65))
                         .foregroundColor(.white)
                         .cornerRadius(4)
 
@@ -177,7 +179,7 @@ public struct GalleryView: View {
                         .font(.system(size: 10, weight: .medium))
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
-                        .background(Color.black.opacity(0.6))
+                        .background(Color.black.opacity(0.65))
                         .foregroundColor(.white)
                         .cornerRadius(4)
                 }
@@ -221,7 +223,7 @@ public struct GalleryView: View {
             } else if isDownloaded {
                 Button(action: {
                     downloader.downloadAndApply(item: item) { success in
-                        if success { showToast("Applied \"\(item.title)\"!") }
+                        if success { showToast("Applied \"\(item.title)\" to Desktop & Lock Screen!") }
                     }
                 }) {
                     HStack {
@@ -239,12 +241,12 @@ public struct GalleryView: View {
             } else {
                 Button(action: {
                     downloader.downloadAndApply(item: item) { success in
-                        if success { showToast("Downloaded and applied \"\(item.title)\"!") }
+                        if success { showToast("Applied \"\(item.title)\" to Desktop & Lock Screen!") }
                     }
                 }) {
                     HStack {
                         Image(systemName: item.isLocalCopy ? "bolt.fill" : "arrow.down.circle.fill")
-                        Text(item.isLocalCopy ? "Import & Apply" : "Download & Set")
+                        Text(item.isLocalCopy ? "1-Click Apply" : "Download & Set (1-Click)")
                     }
                     .font(.system(size: 11, weight: .semibold))
                     .frame(maxWidth: .infinity)
@@ -320,6 +322,8 @@ public struct GalleryView: View {
             id: UUID().uuidString,
             title: title,
             category: "Custom Web",
+            thumbnailURL: nil,
+            previewURL: nil,
             downloadURL: url,
             resolution: "HD",
             fileSizeString: "Online",
@@ -366,22 +370,5 @@ public struct GalleryView: View {
         .cornerRadius(16)
         .shadow(radius: 5)
         .padding(.bottom, 12)
-    }
-
-    private func iconForCategory(_ category: String) -> String {
-        if category.contains("Space") || category.contains("Earth") { return "globe.americas.fill" }
-        if category.contains("Nature") { return "leaf.fill" }
-        if category.contains("Cities") { return "building.2.fill" }
-        if category.contains("Gaming") { return "gamecontroller.fill" }
-        if category.contains("Anime") { return "sparkles" }
-        return "play.rectangle.fill"
-    }
-
-    private func gradientColors(for item: CatalogItem) -> [Color] {
-        if item.category.contains("Space") { return [Color.purple.opacity(0.8), Color.blue.opacity(0.8)] }
-        if item.category.contains("Nature") { return [Color.green.opacity(0.8), Color.teal.opacity(0.8)] }
-        if item.category.contains("Cities") { return [Color.orange.opacity(0.8), Color.red.opacity(0.8)] }
-        if item.category.contains("Backdrop") { return [Color.pink.opacity(0.8), Color.purple.opacity(0.8)] }
-        return [Color.blue.opacity(0.8), Color.indigo.opacity(0.8)]
     }
 }

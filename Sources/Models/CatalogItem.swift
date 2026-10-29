@@ -4,6 +4,7 @@ public struct CatalogItem: Identifiable, Equatable, Hashable {
     public let id: String
     public let title: String
     public let category: String
+    public let thumbnailURL: URL?
     public let previewURL: URL?
     public let downloadURL: URL
     public let resolution: String
@@ -15,6 +16,7 @@ public struct CatalogItem: Identifiable, Equatable, Hashable {
         id: String,
         title: String,
         category: String,
+        thumbnailURL: URL? = nil,
         previewURL: URL? = nil,
         downloadURL: URL,
         resolution: String = "4K",
@@ -25,6 +27,7 @@ public struct CatalogItem: Identifiable, Equatable, Hashable {
         self.id = id
         self.title = title
         self.category = category
+        self.thumbnailURL = thumbnailURL
         self.previewURL = previewURL
         self.downloadURL = downloadURL
         self.resolution = resolution
