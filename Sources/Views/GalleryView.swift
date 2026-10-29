@@ -4,20 +4,21 @@ import AppKit
 public struct GalleryView: View {
     @ObservedObject private var downloader = WallpaperDownloader.shared
     @State private var items: [CatalogItem] = []
-    @State private var selectedCategory: String = "🔥 Steam / Wallpaper Engine"
+    @State private var selectedCategory: String = "🔥 Trending Workshop"
     @State private var searchText: String = ""
     @State private var customURLText: String = ""
     @State private var customTitleText: String = ""
     @State private var toastMessage: String?
     @State private var refreshTrigger: UUID = UUID()
+    @State private var isSearchingBackend: Bool = false
+    @State private var searchTask: Task<Void, Never>?
 
     private let categories = [
-        "🔥 Steam / Wallpaper Engine",
-        "All",
-        "Backdrop Collection",
+        "🔥 Trending Workshop",
         "Anime & Gaming",
+        "Sci-Fi & Cyberpunk",
         "4K Nature & Space",
-        "Lofi & Aesthetic",
+        "Backdrop Collection",
         "Downloaded / Ready",
         "Custom URL"
     ]
@@ -43,7 +44,7 @@ public struct GalleryView: View {
         .frame(minWidth: 960, minHeight: 660)
         .background(Color(NSColor.windowBackgroundColor))
         .onAppear {
-            loadItems()
+            performLiveSearch(query: searchText, category: selectedCategory)
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("WallpaperEngineStateChanged"))) { _ in
             refreshTrigger = UUID()
@@ -53,13 +54,15 @@ public struct GalleryView: View {
     // MARK: - Header
 
     private var currentDesktopTitle: String {
-        WallpaperEngine.shared.currentDesktopWallpaper?.title ??
+        _ = refreshTrigger
+        return WallpaperEngine.shared.currentDesktopWallpaper?.title ??
             UserDefaults.standard.string(forKey: "WallpaperEngine.desktopWallpaperTitle") ??
             "None"
     }
 
     private var currentLockScreenTitle: String {
-        WallpaperEngine.shared.currentLockScreenWallpaper?.title ??
+        _ = refreshTrigger
+        return WallpaperEngine.shared.currentLockScreenWallpaper?.title ??
             UserDefaults.standard.string(forKey: "WallpaperEngine.lockScreenWallpaperTitle") ??
             "Abi Toads"
     }
@@ -71,7 +74,7 @@ public struct GalleryView: View {
                 .foregroundColor(.accentColor)
 
             VStack(alignment: .leading, spacing: 3) {
-                Text("Wallpaper Gallery & Steam Workshop")
+                Text("Steam Workshop & Wallpaper Engine Hub")
                     .font(.title3)
                     .fontWeight(.bold)
 
@@ -104,27 +107,51 @@ public struct GalleryView: View {
 
             Spacer()
 
-            HStack {
-                Image(systemName: "magnifyingglass")
-                    .foregroundColor(.secondary)
-                TextField("Search wallpapers...", text: $searchText)
-                    .textFieldStyle(PlainTextFieldStyle())
+            // Live Backend Search Field
+            HStack(spacing: 6) {
+                if isSearchingBackend {
+                    ProgressView()
+                        .scaleEffect(0.6)
+                        .frame(width: 14, height: 14)
+                } else {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundColor(.secondary)
+                }
+
+                TextField("Search Steam Workshop live (e.g. toad, cyberpunk)...", text: $searchText, onCommit: {
+                    performLiveSearch(query: searchText, category: selectedCategory)
+                })
+                .textFieldStyle(PlainTextFieldStyle())
+                .onChange(of: searchText) { newValue in
+                    performLiveSearch(query: newValue, category: selectedCategory)
+                }
+
+                if !searchText.isEmpty {
+                    Button(action: {
+                        searchText = ""
+                        performLiveSearch(query: "", category: selectedCategory)
+                    }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundColor(.secondary)
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                }
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             .background(Color(NSColor.controlBackgroundColor))
             .cornerRadius(8)
-            .frame(width: 240)
+            .frame(width: 290)
 
             Button(action: {
-                loadItems()
-                showToast("Library refreshed!")
+                performLiveSearch(query: searchText, category: selectedCategory)
+                showToast("Reloading Steam Workshop backend...")
             }) {
                 Image(systemName: "arrow.clockwise")
                     .font(.system(size: 13, weight: .medium))
             }
             .buttonStyle(PlainButtonStyle())
-            .help("Refresh Library")
+            .help("Refresh Backend Results")
         }
         .padding(16)
     }
@@ -137,6 +164,7 @@ public struct GalleryView: View {
                 ForEach(categories, id: \.self) { cat in
                     Button(action: {
                         selectedCategory = cat
+                        performLiveSearch(query: searchText, category: cat)
                     }) {
                         Text(cat)
                             .font(.system(size: 12, weight: selectedCategory == cat ? .semibold : .regular))
@@ -162,50 +190,40 @@ public struct GalleryView: View {
         }
     }
 
-    // MARK: - Filtered Items
-
-    private var filteredItems: [CatalogItem] {
-        _ = refreshTrigger
-        return items.filter { item in
-            let matchesCategory: Bool
-            switch selectedCategory {
-            case "All":
-                matchesCategory = true
-            case "🔥 Steam / Wallpaper Engine":
-                matchesCategory = item.category.contains("Steam") || item.category.contains("Wallpaper Engine")
-            case "Backdrop Collection":
-                matchesCategory = item.category.contains("Backdrop") || item.sourceDescription.contains("Mac Cache") || item.sourceDescription.contains("Ready on Mac")
-            case "Anime & Gaming":
-                matchesCategory = item.category.contains("Anime") || item.category.contains("Gaming")
-            case "4K Nature & Space":
-                matchesCategory = item.category.contains("4K") || item.category.contains("Nature") || item.category.contains("Space")
-            case "Lofi & Aesthetic":
-                matchesCategory = item.category.contains("Lofi") || item.category.contains("Aesthetic")
-            case "Downloaded / Ready":
-                matchesCategory = downloader.isDownloaded(item: item) || item.isLocalCopy
-            default:
-                matchesCategory = item.category.contains(selectedCategory)
-            }
-
-            let matchesSearch = searchText.isEmpty ||
-                item.title.localizedCaseInsensitiveContains(searchText) ||
-                item.category.localizedCaseInsensitiveContains(searchText) ||
-                item.sourceDescription.localizedCaseInsensitiveContains(searchText)
-
-            return matchesCategory && matchesSearch
-        }
-    }
-
     // MARK: - Grid View
 
     private var galleryGrid: some View {
         ScrollView {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 280, maximum: 330), spacing: 16)], spacing: 16) {
-                ForEach(filteredItems) { item in
-                    wallpaperCard(for: item)
+            if isSearchingBackend && items.isEmpty {
+                VStack(spacing: 12) {
+                    Spacer().frame(height: 60)
+                    ProgressView("Searching Steam Workshop backend...")
+                    Text("Fetching live items from Steam Community API...")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
                 }
+                .frame(maxWidth: .infinity)
+            } else if items.isEmpty {
+                VStack(spacing: 10) {
+                    Spacer().frame(height: 60)
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 32))
+                        .foregroundColor(.secondary)
+                    Text("No wallpapers found for \"\(searchText)\"")
+                        .font(.headline)
+                    Text("Try searching another keyword (e.g. anime, toad, car, cyberpunk, genshin, nature)")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+            } else {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 280, maximum: 330), spacing: 16)], spacing: 16) {
+                    ForEach(items) { item in
+                        wallpaperCard(for: item)
+                    }
+                }
+                .padding(16)
             }
-            .padding(16)
         }
     }
 
@@ -400,7 +418,7 @@ public struct GalleryView: View {
                 .font(.title3)
                 .fontWeight(.bold)
 
-            Text("Paste any direct video link (.mp4, .mov, .m4v, .webm) from Wallpaper Engine, Steam Workshop mirror, or your own server to download and apply.")
+            Text("Paste any direct video link (.mp4, .mov, .m4v, .webm) to download and apply.")
                 .font(.subheadline)
                 .foregroundColor(.secondary)
 
@@ -484,8 +502,25 @@ public struct GalleryView: View {
 
     // MARK: - Helpers
 
-    private func loadItems() {
-        items = CatalogService.shared.fetchCatalog()
+    private func performLiveSearch(query: String, category: String) {
+        searchTask?.cancel()
+        isSearchingBackend = true
+
+        searchTask = Task {
+            // Small debounce if typing
+            if !query.isEmpty {
+                try? await Task.sleep(nanoseconds: 300_000_000)
+            }
+            guard !Task.isCancelled else { return }
+
+            let results = await CatalogService.shared.searchLive(query: query, category: category)
+            guard !Task.isCancelled else { return }
+
+            await MainActor.run {
+                self.items = results
+                self.isSearchingBackend = false
+            }
+        }
     }
 
     private func showToast(_ msg: String) {

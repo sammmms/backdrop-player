@@ -28,8 +28,14 @@ public final class WallpaperDownloader: NSObject, ObservableObject, URLSessionDo
     }
 
     public func destinationURL(for item: CatalogItem) -> URL {
-        let ext = item.downloadURL.pathExtension.isEmpty ? "mov" : item.downloadURL.pathExtension
-        let safeTitle = item.title.replacingOccurrences(of: "/", with: "-")
+        let safeTitle = item.title
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ":", with: "-")
+            .replacingOccurrences(of: "\"", with: "")
+        var ext = item.downloadURL.pathExtension.lowercased()
+        if ext.isEmpty || ext.count > 5 {
+            ext = "gif"
+        }
         return BackdropLibraryService.shared.localWallpapersDirectory
             .appendingPathComponent("\(safeTitle).\(ext)")
     }
@@ -149,10 +155,12 @@ public final class WallpaperDownloader: NSObject, ObservableObject, URLSessionDo
 
     private func applyDownloaded(item: CatalogItem, fileURL: URL, target: ApplyTarget) {
         let size = (try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+        let ext = fileURL.pathExtension.lowercased()
+        let isVideo = ["mov", "mp4", "m4v", "webm"].contains(ext)
         let wallpaper = WallpaperItem(
             id: "local-\(item.title)",
             title: item.title,
-            type: .video,
+            type: isVideo ? .video : .image,
             fileURL: fileURL,
             fileSize: Int64(size),
             isCustom: false

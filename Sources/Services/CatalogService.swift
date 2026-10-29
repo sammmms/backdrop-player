@@ -27,6 +27,95 @@ public final class CatalogService {
         return items
     }
 
+    // MARK: - Live Backend Search & Browse (Steam Workshop API)
+
+    public func searchLive(query: String, category: String = "All") async -> [CatalogItem] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if !trimmed.isEmpty {
+            // Live query to Steam Workshop backend
+            let steamResults = await SteamWorkshopBackendService.shared.search(query: trimmed)
+
+            // Also check local & curated items matching query
+            let localMatches = fetchCatalog().filter {
+                $0.title.localizedCaseInsensitiveContains(trimmed) ||
+                $0.category.localizedCaseInsensitiveContains(trimmed)
+            }
+
+            var merged: [CatalogItem] = []
+            var seen = Set<String>()
+
+            for item in localMatches {
+                seen.insert(item.title.lowercased())
+                merged.append(item)
+            }
+
+            for item in steamResults {
+                if !seen.contains(item.title.lowercased()) {
+                    seen.insert(item.title.lowercased())
+                    merged.append(item)
+                }
+            }
+
+            return merged
+        }
+
+        // Category queries to backend when search text is empty
+        switch category {
+        case "🔥 Steam / Wallpaper Engine", "🔥 Trending Workshop":
+            let trending = await SteamWorkshopBackendService.shared.search(query: "", sort: "trend")
+            var list = steamWallpaperEngineItems
+            var seen = Set(list.map { $0.title.lowercased() })
+            for item in trending {
+                if !seen.contains(item.title.lowercased()) {
+                    seen.insert(item.title.lowercased())
+                    list.append(item)
+                }
+            }
+            return list
+
+        case "Anime & Gaming", "Anime":
+            let anime = await SteamWorkshopBackendService.shared.search(query: "anime")
+            var list = curatedCommunityItems.filter { $0.category.contains("Anime") || $0.category.contains("Gaming") }
+            var seen = Set(list.map { $0.title.lowercased() })
+            for item in anime {
+                if !seen.contains(item.title.lowercased()) {
+                    seen.insert(item.title.lowercased())
+                    list.append(item)
+                }
+            }
+            return list
+
+        case "4K Nature & Space":
+            let nature = await SteamWorkshopBackendService.shared.search(query: "nature")
+            var list = appleAerialItems
+            var seen = Set(list.map { $0.title.lowercased() })
+            for item in nature {
+                if !seen.contains(item.title.lowercased()) {
+                    seen.insert(item.title.lowercased())
+                    list.append(item)
+                }
+            }
+            return list
+
+        case "Sci-Fi & Cyberpunk":
+            return await SteamWorkshopBackendService.shared.search(query: "cyberpunk")
+
+        case "Backdrop Collection":
+            return localFeaturedItems + fetchBackdropCachedItems()
+
+        case "Downloaded / Ready":
+            let dir = BackdropLibraryService.shared.localWallpapersDirectory
+            let localFiles = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+            return fetchCatalog().filter { item in
+                localFiles.contains(where: { $0.lowercased().contains(item.title.lowercased()) }) || item.isLocalCopy
+            }
+
+        default:
+            return fetchCatalog()
+        }
+    }
+
     // MARK: - Featured Clean Local Wallpapers
 
     public var localFeaturedItems: [CatalogItem] {

@@ -20,8 +20,11 @@ public final class BackdropLibraryService {
             .appendingPathComponent("Library/Application Support/BackdropWallpaper/.cache")
         self.defaultDatabaseURL = home
             .appendingPathComponent("Library/Application Support/Backdrop/Backdrop.sqlite")
-        self.localWallpapersDirectory = home
-            .appendingPathComponent("Documents/GitHub/backdrop-player/wallpapers")
+
+        let appSupportWallpapers = home
+            .appendingPathComponent("Library/Application Support/BackdropPlayer/Wallpapers")
+        try? FileManager.default.createDirectory(at: appSupportWallpapers, withIntermediateDirectories: true)
+        self.localWallpapersDirectory = appSupportWallpapers
     }
 
     public func fetchWallpapers() -> [WallpaperItem] {
@@ -29,10 +32,16 @@ public final class BackdropLibraryService {
         var foundIDs = Set<String>()
 
         // 1. First, check local clean wallpapers directory in project or bundle resources
-        let searchDirs = [
-            Bundle.main.resourceURL?.appendingPathComponent("wallpapers"),
-            localWallpapersDirectory
-        ].compactMap { $0 }
+        var searchDirs: [URL] = [localWallpapersDirectory]
+        if let bundleWallpapers = Bundle.main.resourceURL?.appendingPathComponent("wallpapers"),
+           FileManager.default.fileExists(atPath: bundleWallpapers.path) {
+            searchDirs.insert(bundleWallpapers, at: 0)
+        } else {
+            // Development fallback
+            let devDir = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Documents/GitHub/backdrop-player/wallpapers")
+            searchDirs.append(devDir)
+        }
 
         for dir in searchDirs {
             if FileManager.default.fileExists(atPath: dir.path) {

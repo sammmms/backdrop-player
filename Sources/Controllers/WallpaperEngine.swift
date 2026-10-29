@@ -380,6 +380,7 @@ public final class WallpaperEngine: NSObject {
         } else {
             let imageView = NSImageView(frame: NSRect(origin: .zero, size: screen.frame.size))
             imageView.image = NSImage(contentsOf: item.fileURL)
+            imageView.animates = true
             imageView.imageScaling = (scalingMode == .aspectFill) ? .scaleAxesIndependently : .scaleProportionallyUpOrDown
             imageView.autoresizingMask = [.width, .height]
             window.contentView = imageView
