@@ -24,12 +24,22 @@ It directly discovers and plays downloaded wallpaper assets from the **Backdrop*
 - **🖥️ Multi-Display Support**:
   - Dynamically creates independent rendering sessions for every attached display and adapts automatically when displays are plugged/unplugged or resolutions change.
 - **🎛️ Menu Bar Controls**:
+  - **Browse Wallpaper Gallery...** (`⌘G`) — Open the built-in gallery & download store.
   - Quick 1-click wallpaper switcher.
   - Play / Pause toggle (`⌘P`).
   - Mute / Unmute audio toggle (`⌘M`).
   - Scaling modes (Fill Screen / Crop vs. Fit Screen / Letterbox).
-  - Desktop layer modes (Behind Desktop Icons vs. Base Desktop Layer).
+  - Desktop layer modes (Desktop Layer vs. Below Desktop Icons).
   - Open Backdrop Assets folder directly in Finder.
+
+---
+
+## 🎨 In-App Wallpaper Gallery & Sourcing (`⌘G`)
+
+`BackdropPlayer` now includes a complete native **SwiftUI Wallpaper Store & Gallery**:
+- **4K Apple Aerials (Official High-Speed CDN)**: Official Apple 4K HDR live streams (Earth & ISS, Auroras, Palau Jellies, Iceland, London, Tokyo, Los Angeles).
+- **Backdrop Local Cache (Instant 1-Click Import)**: Instantly detects and imports all 44 high-res video wallpapers cached from Backdrop (*Goku Starlight*, *Bambi Cottage*, *Dark Souls 3*, *Minecraft Northern Lights*, *Snoopy Cafe*, etc.).
+- **Direct Video URL Downloader**: Paste any `.mp4` or `.mov` link from the web to download and immediately set as desktop wallpaper with real-time download progress.
 
 ---
 
