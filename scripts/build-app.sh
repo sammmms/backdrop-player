@@ -22,6 +22,11 @@ BIN_PATH=$(swift build -c release --show-bin-path)/${APP_NAME}
 cp "${BIN_PATH}" "${MACOS_DIR}/${APP_NAME}"
 chmod +x "${MACOS_DIR}/${APP_NAME}"
 
+if [ -d "wallpapers" ]; then
+    echo "🎨 Bundling clean wallpapers..."
+    cp -R "wallpapers" "${RESOURCES_DIR}/"
+fi
+
 # Generate Info.plist
 cat <<EOF > "${CONTENTS_DIR}/Info.plist"
 <?xml version="1.0" encoding="UTF-8"?>

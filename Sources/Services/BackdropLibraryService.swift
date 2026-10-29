@@ -5,7 +5,9 @@ public final class BackdropLibraryService {
     public static let shared = BackdropLibraryService()
 
     public let defaultAssetsDirectory: URL
+    public let defaultCacheDirectory: URL
     public let defaultDatabaseURL: URL
+    public let localWallpapersDirectory: URL
 
     private var directorySource: DispatchSourceFileSystemObject?
     private var customItemsKey = "BackdropPlayer.CustomWallpapers"
@@ -14,15 +16,58 @@ public final class BackdropLibraryService {
         let home = FileManager.default.homeDirectoryForCurrentUser
         self.defaultAssetsDirectory = home
             .appendingPathComponent("Library/Application Support/Backdrop/Library/Assets")
+        self.defaultCacheDirectory = home
+            .appendingPathComponent("Library/Application Support/BackdropWallpaper/.cache")
         self.defaultDatabaseURL = home
             .appendingPathComponent("Library/Application Support/Backdrop/Backdrop.sqlite")
+        self.localWallpapersDirectory = home
+            .appendingPathComponent("Documents/GitHub/backdrop-player/wallpapers")
     }
 
     public func fetchWallpapers() -> [WallpaperItem] {
         var items: [WallpaperItem] = []
         var foundIDs = Set<String>()
 
-        // 1. Fetch from SQLite if available
+        // 1. First, check local clean wallpapers directory in project or bundle resources
+        let searchDirs = [
+            Bundle.main.resourceURL?.appendingPathComponent("wallpapers"),
+            localWallpapersDirectory
+        ].compactMap { $0 }
+
+        for dir in searchDirs {
+            if FileManager.default.fileExists(atPath: dir.path) {
+                if let contents = try? FileManager.default.contentsOfDirectory(
+                    at: dir,
+                    includingPropertiesForKeys: [.fileSizeKey],
+                    options: [.skipsHiddenFiles]
+                ) {
+                    for url in contents {
+                        let ext = url.pathExtension.lowercased()
+                        guard ["mov", "mp4", "m4v", "heic", "png", "jpg", "jpeg"].contains(ext) else { continue }
+                        let isVideo = ["mov", "mp4", "m4v", "webm"].contains(ext)
+                        let title = url.deletingPathExtension().lastPathComponent
+                        let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+                        let id = "local-\(title)"
+
+                        if !foundIDs.contains(id) {
+                            foundIDs.insert(id)
+                            items.append(
+                                WallpaperItem(
+                                    id: id,
+                                    title: title,
+                                    type: isVideo ? .video : .image,
+                                    fileURL: url,
+                                    fileSize: Int64(size),
+                                    isCustom: false
+                                )
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Fetch from SQLite if available and find clean decrypted cache or raw files
         let dbPath = defaultDatabaseURL.path
         var db: OpaquePointer?
 
@@ -40,11 +85,14 @@ public final class BackdropLibraryService {
                     let title = String(cString: cTitle)
                     let typeString = sqlite3_column_text(statement, 2).map { String(cString: $0) } ?? "video"
                     let fileSize = sqlite3_column_int64(statement, 3)
-
                     let type: WallpaperItem.WallpaperType = (typeString == "video") ? .video : .image
 
-                    // Check if file exists in assets directory
-                    if let fileURL = locateAssetFile(id: id) {
+                    // If we already added this by title from local directory, skip
+                    if items.contains(where: { $0.title.lowercased() == title.lowercased() }) {
+                        continue
+                    }
+
+                    if let fileURL = locateAssetFile(id: id, title: title) {
                         foundIDs.insert(id)
                         items.append(
                             WallpaperItem(
@@ -63,39 +111,6 @@ public final class BackdropLibraryService {
             sqlite3_close(db)
         }
 
-        // 2. Also check for files directly in Assets folder that may not be in DB
-        if FileManager.default.fileExists(atPath: defaultAssetsDirectory.path) {
-            do {
-                let fileURLs = try FileManager.default.contentsOfDirectory(
-                    at: defaultAssetsDirectory,
-                    includingPropertiesForKeys: [.fileSizeKey],
-                    options: [.skipsHiddenFiles]
-                )
-
-                for url in fileURLs {
-                    let baseName = url.deletingPathExtension().lastPathComponent
-                    if !foundIDs.contains(baseName) {
-                        let ext = url.pathExtension.lowercased()
-                        let isVideo = ["mov", "mp4", "m4v", "webm"].contains(ext)
-                        let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-
-                        items.append(
-                            WallpaperItem(
-                                id: baseName,
-                                title: baseName,
-                                type: isVideo ? .video : .image,
-                                fileURL: url,
-                                fileSize: Int64(size),
-                                isCustom: false
-                            )
-                        )
-                    }
-                }
-            } catch {
-                print("Error scanning assets directory: \(error)")
-            }
-        }
-
         // 3. Include custom user-selected items
         let customItems = loadCustomItems()
         items.append(contentsOf: customItems)
@@ -103,15 +118,48 @@ public final class BackdropLibraryService {
         return items
     }
 
-    private func locateAssetFile(id: String) -> URL? {
+    private func locateAssetFile(id: String, title: String) -> URL? {
+        // Priority 1: Check .cache folder (this contains the decrypted, clean MOV without watermarks)
+        if FileManager.default.fileExists(atPath: defaultCacheDirectory.path) {
+            if let cachedFiles = try? FileManager.default.contentsOfDirectory(atPath: defaultCacheDirectory.path) {
+                if let match = cachedFiles.first(where: { $0.hasPrefix(id) && $0.hasSuffix(".mov") }) {
+                    let cacheURL = defaultCacheDirectory.appendingPathComponent(match)
+                    if isValidMedia(url: cacheURL) {
+                        return cacheURL
+                    }
+                }
+            }
+        }
+
+        // Priority 2: Check raw Assets folder
         let extensions = ["mov", "mp4", "m4v", "heic", "png", "jpg", "jpeg"]
         for ext in extensions {
             let candidate = defaultAssetsDirectory.appendingPathComponent("\(id).\(ext)")
-            if FileManager.default.fileExists(atPath: candidate.path) {
+            if FileManager.default.fileExists(atPath: candidate.path) && isValidMedia(url: candidate) {
                 return candidate
             }
         }
+
         return nil
+    }
+
+    private func isValidMedia(url: URL) -> Bool {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
+        defer { try? handle.close() }
+        guard let headerData = try? handle.read(upToCount: 32), headerData.count >= 8 else { return false }
+
+        // Check for QuickTime 'ftyp' or 'moov' or standard image signatures
+        let headerStr = String(decoding: headerData, as: UTF8.self)
+        if headerStr.contains("ftyp") || headerStr.contains("moov") || headerStr.contains("wide") {
+            return true
+        }
+
+        // JPEG / PNG / HEIC check
+        let bytes = [UInt8](headerData)
+        if bytes.starts(with: [0xFF, 0xD8, 0xFF]) { return true } // JPEG
+        if bytes.starts(with: [0x89, 0x50, 0x4E, 0x47]) { return true } // PNG
+
+        return false
     }
 
     // MARK: - Custom Items Management
@@ -188,9 +236,13 @@ public final class BackdropLibraryService {
     public func startWatching(onChange: @escaping () -> Void) {
         stopWatching()
 
-        guard FileManager.default.fileExists(atPath: defaultAssetsDirectory.path) else { return }
+        let watchTarget = FileManager.default.fileExists(atPath: defaultCacheDirectory.path)
+            ? defaultCacheDirectory
+            : defaultAssetsDirectory
 
-        let descriptor = open(defaultAssetsDirectory.path, O_EVTONLY)
+        guard FileManager.default.fileExists(atPath: watchTarget.path) else { return }
+
+        let descriptor = open(watchTarget.path, O_EVTONLY)
         guard descriptor >= 0 else { return }
 
         let source = DispatchSource.makeFileSystemObjectSource(
