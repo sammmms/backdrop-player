@@ -180,7 +180,15 @@ public final class WallpaperEngine: NSObject {
 
     // MARK: - Playback & Wallpaper Control
 
-    public func setDesktopWallpaper(_ item: WallpaperItem) {
+    public enum WallpaperSyncTarget {
+        case desktop
+        case lockScreen
+        case both
+    }
+
+    private let syncQueue = DispatchQueue(label: "com.backdrop.wallpaperSyncQueue", qos: .userInitiated)
+
+    public func setDesktopWallpaper(_ item: WallpaperItem, completion: ((Bool) -> Void)? = nil) {
         print("[WallpaperEngine] Setting Desktop wallpaper: \(item.title) (\(item.fileURL.lastPathComponent))")
         self.currentDesktopWallpaper = item
         self.isPlaying = true
@@ -216,6 +224,14 @@ public final class WallpaperEngine: NSObject {
         self.sessions = activeSessions
         print("[WallpaperEngine] Active desktop sessions: \(sessions.count)")
         notifyStateChange()
+
+        // Sync native macOS Desktop & Mission Control spaces bar in background
+        syncQueue.async { [weak self] in
+            let success = self?.syncNativeStore(for: item, target: .desktop) ?? false
+            DispatchQueue.main.async {
+                completion?(success)
+            }
+        }
     }
 
     public func setLockScreenWallpaper(_ item: WallpaperItem, completion: ((Bool) -> Void)? = nil) {
@@ -225,8 +241,8 @@ public final class WallpaperEngine: NSObject {
         UserDefaults.standard.set(item.id, forKey: "WallpaperEngine.lockScreenWallpaperId")
         UserDefaults.standard.set(item.title, forKey: "WallpaperEngine.lockScreenWallpaperTitle")
 
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let success = self?.updateLockScreenOnly(for: item) ?? false
+        syncQueue.async { [weak self] in
+            let success = self?.syncNativeStore(for: item, target: .lockScreen) ?? false
             DispatchQueue.main.async {
                 self?.notifyStateChange()
                 completion?(success)
@@ -234,53 +250,117 @@ public final class WallpaperEngine: NSObject {
         }
     }
 
-    public func setBothWallpapers(_ item: WallpaperItem) {
-        setDesktopWallpaper(item)
-        setLockScreenWallpaper(item)
+    public func setBothWallpapers(_ item: WallpaperItem, completion: ((Bool) -> Void)? = nil) {
+        print("[WallpaperEngine] Setting Both Desktop & Lock Screen wallpapers: \(item.title)")
+        self.currentDesktopWallpaper = item
+        self.currentLockScreenWallpaper = item
+        self.isPlaying = true
+
+        UserDefaults.standard.set(item.fileURL.path, forKey: "WallpaperEngine.desktopWallpaperPath")
+        UserDefaults.standard.set(item.id, forKey: "WallpaperEngine.desktopWallpaperId")
+        UserDefaults.standard.set(item.title, forKey: "WallpaperEngine.desktopWallpaperTitle")
+
+        UserDefaults.standard.set(item.fileURL.path, forKey: "WallpaperEngine.lockScreenWallpaperPath")
+        UserDefaults.standard.set(item.id, forKey: "WallpaperEngine.lockScreenWallpaperId")
+        UserDefaults.standard.set(item.title, forKey: "WallpaperEngine.lockScreenWallpaperTitle")
+
+        var activeSessions: [ScreenSession] = []
+        let currentScreens = NSScreen.screens
+
+        for screen in currentScreens {
+            if let existing = sessions.first(where: { $0.screen == screen || $0.screen.frame == screen.frame }) {
+                updateSessionContent(session: existing, item: item)
+                activeSessions.append(existing)
+            } else {
+                let session = createSession(for: screen, item: item)
+                activeSessions.append(session)
+            }
+        }
+
+        for oldSession in sessions {
+            if !currentScreens.contains(where: { $0 == oldSession.screen || $0.frame == oldSession.screen.frame }) {
+                oldSession.player?.pause()
+                oldSession.player?.removeAllItems()
+                oldSession.imageView?.animates = false
+                oldSession.window.orderOut(nil)
+            }
+        }
+
+        self.sessions = activeSessions
+        print("[WallpaperEngine] Active desktop sessions: \(sessions.count)")
+        notifyStateChange()
+
+        syncQueue.async { [weak self] in
+            let success = self?.syncNativeStore(for: item, target: .both) ?? false
+            DispatchQueue.main.async {
+                self?.notifyStateChange()
+                completion?(success)
+            }
+        }
     }
 
     public func setWallpaper(_ item: WallpaperItem) {
         setDesktopWallpaper(item)
     }
 
-    // MARK: - Lock Screen Synchronization (Independent)
+    // MARK: - Native Wallpaper Store Synchronization (Spaces, Mission Control & Lock Screen)
 
     public func syncLockScreen(for item: WallpaperItem) {
         setLockScreenWallpaper(item)
     }
 
-    private func updateLockScreenOnly(for item: WallpaperItem) -> Bool {
+    private func ensureStillFrame(for item: WallpaperItem) -> URL? {
         let stillsDir = BackdropLibraryService.shared.localWallpapersDirectory.appendingPathComponent(".stills")
         try? FileManager.default.createDirectory(at: stillsDir, withIntermediateDirectories: true)
         let safeTitle = item.title.replacingOccurrences(of: "/", with: "-")
         let stillURL = stillsDir.appendingPathComponent("\(safeTitle).jpg")
 
-        if !FileManager.default.fileExists(atPath: stillURL.path) {
-            if item.type == .video {
-                let asset = AVURLAsset(url: item.fileURL)
-                let generator = AVAssetImageGenerator(asset: asset)
-                generator.appliesPreferredTrackTransform = true
-                let time = CMTime(seconds: 1.0, preferredTimescale: 60)
-                if let cgImage = try? generator.copyCGImage(at: time, actualTime: nil) {
-                    let rep = NSBitmapImageRep(cgImage: cgImage)
-                    if let data = rep.representation(using: .jpeg, properties: [.compressionFactor: 0.95]) {
-                        try? data.write(to: stillURL)
-                    }
-                }
-            } else if let image = NSImage(contentsOf: item.fileURL) {
-                if let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff) {
-                    let data = rep.representation(using: .jpeg, properties: [.compressionFactor: 0.95])
-                    try? data?.write(to: stillURL)
+        if FileManager.default.fileExists(atPath: stillURL.path) {
+            return stillURL
+        }
+
+        let projectStills = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Documents/GitHub/backdrop-player/wallpapers/.stills/\(safeTitle).jpg")
+        if FileManager.default.fileExists(atPath: projectStills.path) {
+            try? FileManager.default.copyItem(at: projectStills, to: stillURL)
+            return stillURL
+        }
+
+        if item.type == .image, let image = NSImage(contentsOf: item.fileURL) {
+            if let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff) {
+                if let data = rep.representation(using: .jpeg, properties: [.compressionFactor: 0.95]) {
+                    try? data.write(to: stillURL)
+                    return stillURL
                 }
             }
         }
 
-        guard FileManager.default.fileExists(atPath: stillURL.path) else {
-            print("[WallpaperEngine] Failed to generate still frame for lock screen")
+        if item.type == .video {
+            let asset = AVURLAsset(url: item.fileURL)
+            let generator = AVAssetImageGenerator(asset: asset)
+            generator.appliesPreferredTrackTransform = true
+            generator.requestedTimeToleranceBefore = .zero
+            generator.requestedTimeToleranceAfter = CMTime(seconds: 1, preferredTimescale: 60)
+            let time = CMTime(seconds: 1.0, preferredTimescale: 60)
+            if let cgImage = try? generator.copyCGImage(at: time, actualTime: nil) {
+                let rep = NSBitmapImageRep(cgImage: cgImage)
+                if let data = rep.representation(using: .jpeg, properties: [.compressionFactor: 0.95]) {
+                    try? data.write(to: stillURL)
+                    return stillURL
+                }
+            }
+        }
+
+        return nil
+    }
+
+    @discardableResult
+    private func syncNativeStore(for item: WallpaperItem, target: WallpaperSyncTarget) -> Bool {
+        guard let stillURL = ensureStillFrame(for: item) else {
+            print("[WallpaperEngine] Failed to generate still frame for \(item.title)")
             return false
         }
 
-        // Update macOS Store/Index.plist Idle dictionary ONLY so Desktop is untouched
         let home = FileManager.default.homeDirectoryForCurrentUser
         let indexURL = home.appendingPathComponent("Library/Application Support/com.apple.wallpaper/Store/Index.plist")
 
@@ -289,46 +369,84 @@ public final class WallpaperEngine: NSObject {
             return false
         }
 
-        func updateIdleOnly(_ dict: inout [String: Any]) {
+        let shouldUpdateDesktop = (target == .desktop || target == .both)
+        let shouldUpdateIdle = (target == .lockScreen || target == .both)
+
+        let innerPayload: [String: Any] = [
+            "type": "imageFile",
+            "url": ["relative": stillURL.absoluteString]
+        ]
+
+        guard let confData = try? PropertyListSerialization.data(fromPropertyList: innerPayload, format: .binary, options: 0) else {
+            print("[WallpaperEngine] Failed to create binary property list data")
+            return false
+        }
+
+        func updateChoice(dict: inout [String: Any], key: String) {
+            guard var section = dict[key] as? [String: Any],
+                  var content = section["Content"] as? [String: Any],
+                  var choices = content["Choices"] as? [[String: Any]] else {
+                return
+            }
+
+            for i in 0..<choices.count {
+                choices[i]["Provider"] = "com.apple.wallpaper.choice.image"
+                choices[i]["Configuration"] = confData
+            }
+
+            content["Choices"] = choices
+            section["Content"] = content
+            dict[key] = section
+        }
+
+        func traverseAndUpdate(dict: inout [String: Any]) {
+            if shouldUpdateDesktop && dict["Desktop"] != nil {
+                updateChoice(dict: &dict, key: "Desktop")
+            }
+            if shouldUpdateIdle && dict["Idle"] != nil {
+                updateChoice(dict: &dict, key: "Idle")
+            }
+
             for (k, v) in dict {
-                if k == "Idle", var idle = v as? [String: Any] {
-                    if var content = idle["Content"] as? [String: Any],
-                       var choices = content["Choices"] as? [[String: Any]] {
-                        for i in 0..<choices.count {
-                            let inner: [String: Any] = [
-                                "type": "imageFile",
-                                "url": ["relative": stillURL.absoluteString]
-                            ]
-                            if let conf = try? PropertyListSerialization.data(fromPropertyList: inner, format: .binary, options: 0) {
-                                choices[i]["Provider"] = "com.apple.wallpaper.choice.image"
-                                choices[i]["Configuration"] = conf
-                            }
-                        }
-                        content["Choices"] = choices
-                        idle["Content"] = content
-                        dict["Idle"] = idle
-                    }
-                } else if var sub = v as? [String: Any] {
-                    updateIdleOnly(&sub)
+                if var sub = v as? [String: Any] {
+                    traverseAndUpdate(dict: &sub)
                     dict[k] = sub
                 }
             }
         }
 
-        updateIdleOnly(&plist)
+        traverseAndUpdate(dict: &plist)
 
-        if let outData = try? PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0) {
-            try? outData.write(to: indexURL)
+        guard let outData = try? PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0) else {
+            print("[WallpaperEngine] Failed to serialize Index.plist to XML")
+            return false
+        }
 
+        do {
+            try outData.write(to: indexURL, options: .atomic)
+
+            // Notify WallpaperAgent to immediately reload Index.plist and update Spaces thumbnails
             let p = Process()
             p.executableURL = URL(fileURLWithPath: "/usr/bin/killall")
             p.arguments = ["WallpaperAgent"]
-            try? p.run()
-            print("[WallpaperEngine] Successfully set Lock Screen to: \(item.title) (\(stillURL.lastPathComponent))")
-            return true
-        }
+            try p.run()
+            p.waitUntilExit()
 
-        return false
+            // Also update NSWorkspace desktopImageURL for all active screens if desktop was targeted
+            if shouldUpdateDesktop {
+                DispatchQueue.main.async {
+                    for screen in NSScreen.screens {
+                        try? NSWorkspace.shared.setDesktopImageURL(stillURL, for: screen, options: [:])
+                    }
+                }
+            }
+
+            print("[WallpaperEngine] Successfully synced native macOS wallpaper (\(target)) with: \(stillURL.lastPathComponent)")
+            return true
+        } catch {
+            print("[WallpaperEngine] Error writing Index.plist: \(error)")
+            return false
+        }
     }
 
     public func togglePlayPause() {
