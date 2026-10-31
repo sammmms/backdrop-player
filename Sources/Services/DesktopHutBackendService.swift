@@ -37,7 +37,7 @@ public final class DesktopHutBackendService {
         case let c where c.contains("lofi") || c.contains("aesthetic"): return "category/Lofi"
         case let c where c.contains("car") || c.contains("vehicle"): return "category/cars-motorcycles-live-wallpapers"
         case let c where c.contains("sci-fi") || c.contains("cyber"): return "category/tech-live-wallpapers"
-        default: return "category/live-wallpapers"
+        default: return "category/Animated-Wallpapers"
         }
     }
 

@@ -44,7 +44,8 @@ public final class CatalogService {
     public func searchLive(
         query: String,
         marketplace: String = "🌐 All Marketplaces",
-        category: String = "All Categories"
+        category: String = "All Categories",
+        page: Int = 1
     ) async -> [CatalogItem] {
         let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -53,15 +54,16 @@ public final class CatalogService {
             let steamQuery = trimmedQuery.isEmpty
                 ? (category == "All Categories" ? "" : categorySteamKeyword(for: category))
                 : trimmedQuery
-            return await SteamWorkshopBackendService.shared.search(query: steamQuery, sort: "trend")
+            return await SteamWorkshopBackendService.shared.search(query: steamQuery, sort: "trend", page: page)
 
         case "🌸 MoeWalls (Anime & Aesthetic)":
-            return await MoeWallsBackendService.shared.search(query: trimmedQuery, category: category)
+            return await MoeWallsBackendService.shared.search(query: trimmedQuery, category: category, page: page)
 
         case "⚡ DesktopHut (4K PC)":
-            return await DesktopHutBackendService.shared.search(query: trimmedQuery, category: category)
+            return await DesktopHutBackendService.shared.search(query: trimmedQuery, category: category, page: page)
 
         case "🪐 Wallpaper Engine Space":
+            guard page == 1 else { return [] }
             var list = steamWallpaperEngineItems
             if !trimmedQuery.isEmpty {
                 list = list.filter {
@@ -75,6 +77,7 @@ public final class CatalogService {
             return list
 
         case "🍏 Apple Aerials 4K":
+            guard page == 1 else { return [] }
             var list = appleAerialItems
             if !trimmedQuery.isEmpty {
                 list = list.filter {
@@ -85,6 +88,7 @@ public final class CatalogService {
             return list
 
         case "🎬 Backdrop Collection":
+            guard page == 1 else { return [] }
             var list = localFeaturedItems + fetchBackdropCachedItems()
             if !trimmedQuery.isEmpty {
                 list = list.filter { $0.title.localizedCaseInsensitiveContains(trimmedQuery) }
@@ -95,6 +99,7 @@ public final class CatalogService {
             return list
 
         case "💾 Downloaded / Ready":
+            guard page == 1 else { return [] }
             let dir = BackdropLibraryService.shared.localWallpapersDirectory
             let localFiles = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
             var list = fetchCatalog().filter { item in
@@ -109,23 +114,24 @@ public final class CatalogService {
             return []
 
         default:
-            // "🌐 All Marketplaces" (Aggregate across providers)
-            return await aggregateAllMarketplaces(query: trimmedQuery, category: category)
+            // "🌐 All Marketplaces" (Aggregate across providers with Infinite Pagination!)
+            return await aggregateAllMarketplaces(query: trimmedQuery, category: category, page: page)
         }
     }
 
     // Backward-compatible overload
     public func searchLive(query: String, category: String = "All") async -> [CatalogItem] {
-        return await searchLive(query: query, marketplace: "🌐 All Marketplaces", category: category)
+        return await searchLive(query: query, marketplace: "🌐 All Marketplaces", category: category, page: 1)
     }
 
-    private func aggregateAllMarketplaces(query: String, category: String) async -> [CatalogItem] {
+    private func aggregateAllMarketplaces(query: String, category: String, page: Int = 1) async -> [CatalogItem] {
         async let steamTask = SteamWorkshopBackendService.shared.search(
             query: query.isEmpty ? (category == "All Categories" ? "" : categorySteamKeyword(for: category)) : query,
-            sort: "trend"
+            sort: "trend",
+            page: page
         )
-        async let moeTask = MoeWallsBackendService.shared.search(query: query, category: category)
-        async let dhTask = DesktopHutBackendService.shared.search(query: query, category: category)
+        async let moeTask = MoeWallsBackendService.shared.search(query: query, category: category, page: page)
+        async let dhTask = DesktopHutBackendService.shared.search(query: query, category: category, page: page)
 
         let (steam, moe, dh) = await (steamTask, moeTask, dhTask)
 
@@ -158,8 +164,8 @@ public final class CatalogService {
             }
         }
 
-        // If user searched for a specific keyword, also check if curated open catalog items match
-        if !query.isEmpty {
+        // If user searched for a specific keyword on page 1, also check if curated open catalog items match
+        if page == 1 && !query.isEmpty {
             let onlineExtra = (steamWallpaperEngineItems + appleAerialItems).filter {
                 $0.title.localizedCaseInsensitiveContains(query) ||
                 $0.category.localizedCaseInsensitiveContains(query)

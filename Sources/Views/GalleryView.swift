@@ -13,6 +13,9 @@ public struct GalleryView: View {
     @State private var refreshTrigger: UUID = UUID()
     @State private var isSearchingBackend: Bool = false
     @State private var searchTask: Task<Void, Never>?
+    @State private var currentPage: Int = 1
+    @State private var isLoadingMore: Bool = false
+    @State private var canLoadMore: Bool = true
 
     private let marketplaces = CatalogService.availableMarketplaces
     private let categories = CatalogService.availableCategories
@@ -317,9 +320,46 @@ public struct GalleryView: View {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 280, maximum: 330), spacing: 16)], spacing: 16) {
                     ForEach(items) { item in
                         wallpaperCard(for: item)
+                            .onAppear {
+                                if let idx = items.firstIndex(where: { $0.id == item.id }),
+                                   idx >= items.count - 4 {
+                                    loadNextPage()
+                                }
+                            }
                     }
                 }
                 .padding(16)
+
+                // Infinite Scroll Bottom Indicator & Trigger
+                if canLoadMore && !items.isEmpty {
+                    VStack(spacing: 8) {
+                        if isLoadingMore {
+                            HStack(spacing: 8) {
+                                ProgressView()
+                                    .scaleEffect(0.7)
+                                Text("Loading more live wallpapers...")
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundColor(.secondary)
+                            }
+                            .padding(.vertical, 16)
+                        } else {
+                            Button(action: { loadNextPage() }) {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "arrow.down.circle")
+                                    Text("Load More Live Wallpapers (Page \(currentPage + 1))")
+                                }
+                                .font(.system(size: 12, weight: .medium))
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 8)
+                                .background(Color(NSColor.controlBackgroundColor))
+                                .cornerRadius(8)
+                            }
+                            .buttonStyle(PlainButtonStyle())
+                            .padding(.vertical, 16)
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                }
             }
         }
     }
@@ -671,6 +711,8 @@ public struct GalleryView: View {
     private func performLiveSearch(query: String, marketplace: String, category: String) {
         searchTask?.cancel()
         isSearchingBackend = true
+        currentPage = 1
+        canLoadMore = true
 
         searchTask = Task {
             // Debounce when actively typing text
@@ -679,12 +721,50 @@ public struct GalleryView: View {
             }
             guard !Task.isCancelled else { return }
 
-            let results = await CatalogService.shared.searchLive(query: query, marketplace: marketplace, category: category)
+            let results = await CatalogService.shared.searchLive(query: query, marketplace: marketplace, category: category, page: 1)
             guard !Task.isCancelled else { return }
 
             await MainActor.run {
                 self.items = results
                 self.isSearchingBackend = false
+                self.canLoadMore = !results.isEmpty
+            }
+        }
+    }
+
+    private func loadNextPage() {
+        guard !isLoadingMore && canLoadMore && !isSearchingBackend else { return }
+        isLoadingMore = true
+        let nextPage = currentPage + 1
+
+        Task {
+            let newItems = await CatalogService.shared.searchLive(
+                query: searchText,
+                marketplace: selectedMarketplace,
+                category: selectedCategory,
+                page: nextPage
+            )
+
+            await MainActor.run {
+                if newItems.isEmpty {
+                    self.canLoadMore = false
+                } else {
+                    var existingTitles = Set(self.items.map { $0.title.lowercased() })
+                    var toAppend: [CatalogItem] = []
+                    for item in newItems {
+                        if !existingTitles.contains(item.title.lowercased()) {
+                            existingTitles.insert(item.title.lowercased())
+                            toAppend.append(item)
+                        }
+                    }
+                    if toAppend.isEmpty {
+                        self.canLoadMore = false
+                    } else {
+                        self.items.append(contentsOf: toAppend)
+                        self.currentPage = nextPage
+                    }
+                }
+                self.isLoadingMore = false
             }
         }
     }
