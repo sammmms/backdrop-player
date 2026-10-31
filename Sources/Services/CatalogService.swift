@@ -129,23 +129,11 @@ public final class CatalogService {
 
         let (steam, moe, dh) = await (steamTask, moeTask, dhTask)
 
-        // Also match local and curated items
-        var localMatches = fetchCatalog()
-        if !query.isEmpty {
-            localMatches = localMatches.filter {
-                $0.title.localizedCaseInsensitiveContains(query) ||
-                $0.category.localizedCaseInsensitiveContains(query)
-            }
-        }
-        if category != "All Categories" {
-            localMatches = filterByCategory(items: localMatches, category: category)
-        }
-
         var merged: [CatalogItem] = []
         var seen = Set<String>()
 
-        // Interleave top results for varied marketplace experience
-        let maxCount = max(steam.count, max(moe.count, max(dh.count, localMatches.count)))
+        // Interleave top live online results across providers
+        let maxCount = max(steam.count, max(moe.count, dh.count))
         for i in 0..<maxCount {
             if i < steam.count {
                 let it = steam[i]
@@ -168,12 +156,17 @@ public final class CatalogService {
                     merged.append(it)
                 }
             }
-            if i < localMatches.count {
-                let it = localMatches[i]
-                if !seen.contains(it.title.lowercased()) {
-                    seen.insert(it.title.lowercased())
-                    merged.append(it)
-                }
+        }
+
+        // If user searched for a specific keyword, also check if curated open catalog items match
+        if !query.isEmpty {
+            let onlineExtra = (steamWallpaperEngineItems + appleAerialItems).filter {
+                $0.title.localizedCaseInsensitiveContains(query) ||
+                $0.category.localizedCaseInsensitiveContains(query)
+            }
+            for it in onlineExtra where !seen.contains(it.title.lowercased()) {
+                seen.insert(it.title.lowercased())
+                merged.append(it)
             }
         }
 

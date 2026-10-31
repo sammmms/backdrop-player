@@ -63,7 +63,16 @@ public final class MoeWallsBackendService {
             if let wallIdx = title.range(of: " Live Wallpaper")?.lowerBound {
                 title = String(title[..<wallIdx])
             }
-            title = title.trimmingCharacters(in: .whitespacesAndNewlines)
+            title = title
+                .replacingOccurrences(of: "&#8217;", with: "'")
+                .replacingOccurrences(of: "&#8216;", with: "'")
+                .replacingOccurrences(of: "&#8220;", with: "\"")
+                .replacingOccurrences(of: "&#8221;", with: "\"")
+                .replacingOccurrences(of: "&#038;", with: "&")
+                .replacingOccurrences(of: "&amp;", with: "&")
+                .replacingOccurrences(of: "&quot;", with: "\"")
+                .replacingOccurrences(of: "&#39;", with: "'")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
 
             let page = String(html[pageRange])
             let thumb = String(html[thumbRange])

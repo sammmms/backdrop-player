@@ -59,7 +59,16 @@ public final class DesktopHutBackendService {
             if let dashIdx = title.range(of: " — animated")?.lowerBound {
                 title = String(title[..<dashIdx])
             }
-            title = title.trimmingCharacters(in: .whitespacesAndNewlines)
+            title = title
+                .replacingOccurrences(of: "&#8217;", with: "'")
+                .replacingOccurrences(of: "&#8216;", with: "'")
+                .replacingOccurrences(of: "&#8220;", with: "\"")
+                .replacingOccurrences(of: "&#8221;", with: "\"")
+                .replacingOccurrences(of: "&#038;", with: "&")
+                .replacingOccurrences(of: "&amp;", with: "&")
+                .replacingOccurrences(of: "&quot;", with: "\"")
+                .replacingOccurrences(of: "&#39;", with: "'")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
 
             guard !seen.contains(title.lowercased()) else { continue }
             seen.insert(title.lowercased())

@@ -258,9 +258,24 @@ public struct GalleryView: View {
                     .fill(isSearchingBackend ? Color.orange : Color.green)
                     .frame(width: 7, height: 7)
 
-                Text(isSearchingBackend ? "Fetching live..." : "\(items.count) wallpapers ready")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(.secondary)
+                if isSearchingBackend {
+                    Text("Connecting live...")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(.secondary)
+                } else {
+                    HStack(spacing: 4) {
+                        Text("LIVE")
+                            .font(.system(size: 8, weight: .bold))
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(Color.green.opacity(0.18))
+                            .foregroundColor(.green)
+                            .cornerRadius(3)
+                        Text("\(items.count) wallpapers online")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(.secondary)
+                    }
+                }
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
@@ -312,7 +327,7 @@ public struct GalleryView: View {
     // MARK: - Wallpaper Card
 
     private func wallpaperCard(for item: CatalogItem) -> some View {
-        let isDownloaded = downloader.isDownloaded(item: item) || item.isLocalCopy
+        let isDownloaded = downloader.isDownloaded(item: item)
         let isDesktop = currentDesktopTitle.lowercased().contains(item.title.lowercased()) ||
             item.title.lowercased().contains(currentDesktopTitle.lowercased())
         let isLockScreen = currentLockScreenTitle.lowercased().contains(item.title.lowercased()) ||
@@ -368,6 +383,14 @@ public struct GalleryView: View {
                             .background(Color.green.opacity(0.85))
                             .foregroundColor(.white)
                             .cornerRadius(4)
+                    } else if item.isLocalCopy {
+                        Text("LOCAL")
+                            .font(.system(size: 9, weight: .bold))
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 2)
+                            .background(Color.blue.opacity(0.85))
+                            .foregroundColor(.white)
+                            .cornerRadius(4)
                     }
 
                     Text(item.resolution)
@@ -396,13 +419,27 @@ public struct GalleryView: View {
                     .lineLimit(1)
 
                 HStack(spacing: 6) {
-                    Text(item.sourceDescription)
+                    Button(action: {
+                        if !item.isLocalCopy {
+                            NSWorkspace.shared.open(item.downloadURL)
+                        }
+                    }) {
+                        HStack(spacing: 3) {
+                            Text(item.sourceDescription)
+                            if !item.isLocalCopy {
+                                Image(systemName: "arrow.up.right")
+                                    .font(.system(size: 8))
+                            }
+                        }
                         .font(.system(size: 10, weight: .semibold))
                         .padding(.horizontal, 5)
                         .padding(.vertical, 1.5)
                         .background(sourceBadgeColor(for: item.sourceDescription).opacity(0.15))
                         .foregroundColor(sourceBadgeColor(for: item.sourceDescription))
                         .cornerRadius(3)
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                    .help("Open source on web")
 
                     Text(item.category)
                         .font(.system(size: 11))
