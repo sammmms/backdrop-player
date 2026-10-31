@@ -5,7 +5,7 @@ public struct GalleryView: View {
     @ObservedObject private var downloader = WallpaperDownloader.shared
     @State private var items: [CatalogItem] = []
 
-    // Multi-select checklists
+    // Multi-select checklists for left sidebar
     @State private var selectedMarketplaces: Set<String> = Set(CatalogService.availableMarketplaces.filter { $0 != "🔗 Custom Video URL" })
     @State private var selectedCategories: Set<String> = Set(CatalogService.availableCategories)
 
@@ -20,12 +20,24 @@ public struct GalleryView: View {
     @State private var isLoadingMore: Bool = false
     @State private var canLoadMore: Bool = true
 
-    // Sheet for per-wallpaper config
-    @State private var configuringItem: CatalogItem?
-    @State private var showCustomURLView: Bool = false
+    // Applying state per wallpaper item (e.g. "desktop", "lockScreen", "both")
+    @State private var applyingItemIds: [String: String] = [:]
 
-    // Live desktop playback rate for sidebar control
-    @State private var activeDesktopRate: Double = 1.0
+    // Right Inspector Sidebar state
+    @State private var isInspectorVisible: Bool = true
+    // 0 = Desktop, 1 = Lock Screen, 2 = Selected Wallpaper
+    @State private var selectedTargetMode: Int = 0
+    @State private var selectedItem: CatalogItem?
+
+    // Detached Time Scale & Volume controls
+    @State private var desktopRate: Double = 1.0
+    @State private var lockScreenRate: Double = 1.0
+    @State private var itemRate: Double = 1.0
+    @State private var itemVolume: Float = 1.0
+    @State private var desktopVolume: Float = 1.0
+    @State private var scalingMode: WallpaperScalingMode = .aspectFill
+
+    @State private var showCustomURLView: Bool = false
 
     private let marketplaces = CatalogService.availableMarketplaces.filter { $0 != "🔗 Custom Video URL" }
     private let categories = CatalogService.availableCategories
@@ -35,57 +47,69 @@ public struct GalleryView: View {
 
     public var body: some View {
         HStack(spacing: 0) {
-            // MARK: - Left Persistent Sidebar
-            sidebarView
-                .frame(width: 270)
+            // MARK: - 1. Left Sidebar (Marketplaces & Categories Checklist)
+            leftSidebarView
+                .frame(width: 230)
                 .background(Color(NSColor.controlBackgroundColor).opacity(0.85))
 
             Divider()
 
-            // MARK: - Right Main Content Area
+            // MARK: - 2. Center Content Area (Search Bar + Gallery Grid)
             VStack(spacing: 0) {
-                mainTopBar
+                centerTopBar
                 Divider()
 
-                if showCustomURLView {
-                    directURLView
-                } else {
-                    galleryGrid
-                }
+                ZStack(alignment: .bottom) {
+                    if showCustomURLView {
+                        directURLView
+                    } else {
+                        galleryGrid
+                    }
 
-                if let toast = toastMessage {
-                    toastBanner(toast)
+                    if let toast = toastMessage {
+                        toastBanner(toast)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color(NSColor.windowBackgroundColor))
-        }
-        .frame(minWidth: 1040, minHeight: 700)
-        .sheet(item: $configuringItem) { item in
-            WallpaperConfigSheet(item: item) {
-                configuringItem = nil
-                refreshTrigger = UUID()
+
+            // MARK: - 3. Right Sidebar (Previews at top + Detached Configuration below)
+            if isInspectorVisible {
+                Divider()
+                rightSidebarView
+                    .frame(width: 300)
+                    .background(Color(NSColor.controlBackgroundColor).opacity(0.95))
             }
         }
+        .frame(minWidth: 1080, minHeight: 700)
         .onAppear {
-            activeDesktopRate = WallpaperEngine.shared.currentPlaybackRate
+            syncRatesFromEngine()
             performLiveMultiSearch(query: searchText, marketplaces: selectedMarketplaces, categories: selectedCategories)
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("WallpaperEngineStateChanged"))) { _ in
             refreshTrigger = UUID()
-            activeDesktopRate = WallpaperEngine.shared.currentPlaybackRate
+            syncRatesFromEngine()
         }
     }
 
-    // MARK: - Left Sidebar
+    private func syncRatesFromEngine() {
+        desktopRate = WallpaperEngine.shared.desktopPlaybackRate
+        lockScreenRate = WallpaperEngine.shared.lockScreenPlaybackRate
+        desktopVolume = WallpaperEngine.shared.getVolume()
+        scalingMode = WallpaperEngine.shared.scalingMode
+    }
 
-    private var sidebarView: some View {
+    // MARK: - Left Sidebar (Filters Only)
+
+    private var leftSidebarView: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                // 1. Sidebar Header
+            VStack(alignment: .leading, spacing: 16) {
+                // Logo & Header
                 HStack(spacing: 8) {
                     Image(systemName: "sparkles.tv")
-                        .font(.system(size: 20, weight: .bold))
+                        .font(.system(size: 18, weight: .bold))
                         .foregroundColor(.accentColor)
                     Text("Backdrop Hub")
                         .font(.headline)
@@ -96,22 +120,7 @@ public struct GalleryView: View {
 
                 Divider()
 
-                // 2. Active Screen Mini Previews
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("ACTIVE DISPLAYS")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundColor(.secondary)
-
-                    // Desktop Mini Preview
-                    miniDesktopPreviewCard
-
-                    // Lock Screen Mini Preview
-                    miniLockScreenPreviewCard
-                }
-
-                Divider()
-
-                // 3. Marketplace Checklist
+                // Marketplaces Checklist
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
                         Label("Marketplaces", systemImage: "globe.americas.fill")
@@ -137,9 +146,7 @@ public struct GalleryView: View {
 
                     ForEach(marketplaces, id: \.self) { m in
                         HStack(spacing: 6) {
-                            Button(action: {
-                                toggleMarketplace(m)
-                            }) {
+                            Button(action: { toggleMarketplace(m) }) {
                                 Image(systemName: selectedMarketplaces.contains(m) ? "checkmark.square.fill" : "square")
                                     .foregroundColor(selectedMarketplaces.contains(m) ? .accentColor : .secondary)
                                     .font(.system(size: 13))
@@ -150,9 +157,7 @@ public struct GalleryView: View {
                                 .font(.system(size: 11, weight: selectedMarketplaces.contains(m) ? .semibold : .regular))
                                 .foregroundColor(selectedMarketplaces.contains(m) ? .primary : .secondary)
                                 .lineLimit(1)
-                                .onTapGesture {
-                                    toggleMarketplace(m)
-                                }
+                                .onTapGesture { toggleMarketplace(m) }
 
                             Spacer()
                         }
@@ -162,7 +167,7 @@ public struct GalleryView: View {
 
                 Divider()
 
-                // 4. Category Checklist
+                // Categories Checklist
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
                         Label("Categories", systemImage: "tag.fill")
@@ -188,9 +193,7 @@ public struct GalleryView: View {
 
                     ForEach(categories, id: \.self) { c in
                         HStack(spacing: 6) {
-                            Button(action: {
-                                toggleCategory(c)
-                            }) {
+                            Button(action: { toggleCategory(c) }) {
                                 Image(systemName: selectedCategories.contains(c) ? "checkmark.square.fill" : "square")
                                     .foregroundColor(selectedCategories.contains(c) ? .purple : .secondary)
                                     .font(.system(size: 13))
@@ -201,9 +204,7 @@ public struct GalleryView: View {
                                 .font(.system(size: 11, weight: selectedCategories.contains(c) ? .semibold : .regular))
                                 .foregroundColor(selectedCategories.contains(c) ? .primary : .secondary)
                                 .lineLimit(1)
-                                .onTapGesture {
-                                    toggleCategory(c)
-                                }
+                                .onTapGesture { toggleCategory(c) }
 
                             Spacer()
                         }
@@ -213,11 +214,9 @@ public struct GalleryView: View {
 
                 Divider()
 
-                // 5. Actions / Custom URL
+                // Bottom actions
                 VStack(spacing: 8) {
-                    Button(action: {
-                        showCustomURLView.toggle()
-                    }) {
+                    Button(action: { showCustomURLView.toggle() }) {
                         HStack {
                             Image(systemName: "link.badge.plus")
                             Text(showCustomURLView ? "Back to Catalog Grid" : "Custom Video URL...")
@@ -253,236 +252,13 @@ public struct GalleryView: View {
                 }
                 .padding(.bottom, 20)
             }
-            .padding(.horizontal, 14)
+            .padding(.horizontal, 12)
         }
     }
 
-    // MARK: - Mini Rendered Previews
+    // MARK: - Center Top Bar
 
-    private var desktopItem: WallpaperItem? {
-        _ = refreshTrigger
-        return WallpaperEngine.shared.currentDesktopWallpaper
-    }
-
-    private var lockScreenItem: WallpaperItem? {
-        _ = refreshTrigger
-        return WallpaperEngine.shared.currentLockScreenWallpaper
-    }
-
-    private var currentDesktopTitle: String {
-        desktopItem?.title ??
-            UserDefaults.standard.string(forKey: "WallpaperEngine.desktopWallpaperTitle") ??
-            "Kirby Floating on Pond"
-    }
-
-    private var currentLockScreenTitle: String {
-        lockScreenItem?.title ??
-            UserDefaults.standard.string(forKey: "WallpaperEngine.lockScreenWallpaperTitle") ??
-            "Abi Toads (Original)"
-    }
-
-    private var miniDesktopPreviewCard: some View {
-        let stillImg = WallpaperEngine.shared.stillFrameImage(for: desktopItem)
-        let isPlaying = WallpaperEngine.shared.isPlaying
-
-        return VStack(spacing: 6) {
-            // Rendered Screen Box
-            ZStack(alignment: .topLeading) {
-                if let img = stillImg {
-                    Image(nsImage: img)
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                        .frame(width: 242, height: 110)
-                        .clipped()
-                } else {
-                    LinearGradient(
-                        colors: [Color.blue.opacity(0.8), Color.purple.opacity(0.8)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                    .frame(width: 242, height: 110)
-                }
-
-                // Top Badges & Controls
-                HStack {
-                    HStack(spacing: 3) {
-                        Image(systemName: "display")
-                        Text("Desktop")
-                    }
-                    .font(.system(size: 9, weight: .bold))
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 2)
-                    .background(Color.blue)
-                    .foregroundColor(.white)
-                    .cornerRadius(4)
-
-                    Spacer()
-
-                    // Play/Pause button
-                    Button(action: {
-                        WallpaperEngine.shared.togglePlayPause()
-                        refreshTrigger = UUID()
-                    }) {
-                        Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                            .font(.system(size: 16))
-                            .foregroundColor(.white)
-                            .shadow(radius: 2)
-                    }
-                    .buttonStyle(PlainButtonStyle())
-                    .help(isPlaying ? "Pause wallpaper" : "Resume wallpaper")
-                }
-                .padding(6)
-
-                // Bottom title overlay
-                VStack {
-                    Spacer()
-                    HStack {
-                        Text(currentDesktopTitle)
-                            .font(.system(size: 10, weight: .bold))
-                            .lineLimit(1)
-                            .foregroundColor(.white)
-                            .shadow(color: .black.opacity(0.8), radius: 2)
-                        Spacer()
-                        Text(String(format: "%.2fx", activeDesktopRate))
-                            .font(.system(size: 9, weight: .bold, design: .monospaced))
-                            .padding(.horizontal, 4)
-                            .padding(.vertical, 1)
-                            .background(Color.black.opacity(0.6))
-                            .foregroundColor(.white)
-                            .cornerRadius(3)
-                    }
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 4)
-                    .background(
-                        LinearGradient(
-                            colors: [Color.clear, Color.black.opacity(0.75)],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                    )
-                }
-            }
-            .frame(width: 242, height: 110)
-            .cornerRadius(8)
-            .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(Color.blue.opacity(0.4), lineWidth: 1)
-            )
-
-            // Dynamic Playback Speed / Time Scale Slider & Presets for Desktop
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Image(systemName: "speedometer")
-                        .font(.system(size: 9))
-                        .foregroundColor(.blue)
-                    Text("Time Scale: \(String(format: "%.2fx", activeDesktopRate))")
-                        .font(.system(size: 10, weight: .semibold))
-                    Spacer()
-                }
-
-                Slider(value: $activeDesktopRate, in: 0.25...2.50, step: 0.05) { editing in
-                    if !editing {
-                        WallpaperEngine.shared.setPlaybackRate(activeDesktopRate)
-                    }
-                }
-                .onChange(of: activeDesktopRate) { newRate in
-                    WallpaperEngine.shared.setPlaybackRate(newRate)
-                }
-
-                // Presets
-                HStack(spacing: 3) {
-                    ForEach(ratePresets, id: \.self) { p in
-                        Button(action: {
-                            activeDesktopRate = p
-                            WallpaperEngine.shared.setPlaybackRate(p)
-                        }) {
-                            Text(String(format: "%.1fx", p))
-                                .font(.system(size: 9, weight: abs(activeDesktopRate - p) < 0.05 ? .bold : .regular))
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 2)
-                                .background(abs(activeDesktopRate - p) < 0.05 ? Color.blue : Color(NSColor.separatorColor).opacity(0.2))
-                                .foregroundColor(abs(activeDesktopRate - p) < 0.05 ? .white : .primary)
-                                .cornerRadius(3)
-                        }
-                        .buttonStyle(PlainButtonStyle())
-                    }
-                }
-            }
-            .padding(6)
-            .background(Color(NSColor.controlBackgroundColor).opacity(0.5))
-            .cornerRadius(6)
-        }
-    }
-
-    private var miniLockScreenPreviewCard: some View {
-        let stillImg = WallpaperEngine.shared.stillFrameImage(for: lockScreenItem)
-
-        return ZStack(alignment: .topLeading) {
-            if let img = stillImg {
-                Image(nsImage: img)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(width: 242, height: 80)
-                    .clipped()
-            } else {
-                LinearGradient(
-                    colors: [Color.purple.opacity(0.8), Color.indigo.opacity(0.8)],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-                .frame(width: 242, height: 80)
-            }
-
-            // Top Badges
-            HStack {
-                HStack(spacing: 3) {
-                    Image(systemName: "lock.fill")
-                    Text("Lock Screen")
-                }
-                .font(.system(size: 9, weight: .bold))
-                .padding(.horizontal, 5)
-                .padding(.vertical, 2)
-                .background(Color.purple)
-                .foregroundColor(.white)
-                .cornerRadius(4)
-
-                Spacer()
-            }
-            .padding(6)
-
-            // Bottom title overlay
-            VStack {
-                Spacer()
-                HStack {
-                    Text(currentLockScreenTitle)
-                        .font(.system(size: 10, weight: .bold))
-                        .lineLimit(1)
-                        .foregroundColor(.white)
-                        .shadow(color: .black.opacity(0.8), radius: 2)
-                    Spacer()
-                }
-                .padding(.horizontal, 6)
-                .padding(.vertical, 4)
-                .background(
-                    LinearGradient(
-                        colors: [Color.clear, Color.black.opacity(0.75)],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                )
-            }
-        }
-        .frame(width: 242, height: 80)
-        .cornerRadius(8)
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(Color.purple.opacity(0.4), lineWidth: 1)
-        )
-    }
-
-    // MARK: - Right Main Top Bar
-
-    private var mainTopBar: some View {
+    private var centerTopBar: some View {
         HStack(spacing: 12) {
             // Live Search Field
             HStack(spacing: 8) {
@@ -561,11 +337,22 @@ public struct GalleryView: View {
             }
             .buttonStyle(PlainButtonStyle())
             .help("Refresh Live Marketplaces")
+
+            // Right Inspector Sidebar Toggle
+            Button(action: {
+                withAnimation { isInspectorVisible.toggle() }
+            }) {
+                Image(systemName: isInspectorVisible ? "sidebar.right" : "sidebar.right")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(isInspectorVisible ? .accentColor : .secondary)
+            }
+            .buttonStyle(PlainButtonStyle())
+            .help("Toggle Configuration & Previews Sidebar")
         }
         .padding(14)
     }
 
-    // MARK: - Gallery Grid
+    // MARK: - Center Gallery Grid
 
     private var galleryGrid: some View {
         ScrollView {
@@ -649,7 +436,10 @@ public struct GalleryView: View {
             item.title.lowercased().contains(currentLockScreenTitle.lowercased())
         let progress = downloader.downloadProgress[item.id]
         let status = downloader.downloadStatus[item.id]
+        let isApplying = applyingItemIds[item.id]
         let savedSpeed = WallpaperEngine.shared.getPlaybackRate(for: item.id)
+
+        let isConfiguringThis = (selectedTargetMode == 2 && selectedItem?.id == item.id)
 
         return VStack(alignment: .leading, spacing: 10) {
             // Preview Thumbnail
@@ -758,7 +548,7 @@ public struct GalleryView: View {
                 }
             }
 
-            // Download Progress or Action Buttons
+            // Download Progress / Applying Spinner / Action Buttons
             if let p = progress {
                 VStack(spacing: 4) {
                     ProgressView(value: p)
@@ -770,15 +560,21 @@ public struct GalleryView: View {
                     }
                 }
                 .padding(.vertical, 4)
+            } else if let applyTarget = isApplying {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .scaleEffect(0.7)
+                    Text("Setting \(applyTarget)...")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 6)
             } else {
                 HStack(spacing: 6) {
                     // Button 1: Set Desktop
                     Button(action: {
-                        downloader.downloadAndApply(item: item, target: .desktop) { success in
-                            if success {
-                                showToast("🖥️ Set \"\(item.title)\" as Desktop wallpaper!")
-                            }
-                        }
+                        applyWallpaper(item: item, target: .desktop)
                     }) {
                         HStack(spacing: 4) {
                             Image(systemName: isDesktop ? "checkmark.circle.fill" : "display")
@@ -790,16 +586,13 @@ public struct GalleryView: View {
                         .background(isDesktop ? Color.blue : Color.blue.opacity(0.15))
                         .foregroundColor(isDesktop ? .white : .blue)
                         .cornerRadius(6)
+                        .contentShape(Rectangle())
                     }
-                    .buttonStyle(PlainButtonStyle())
+                    .buttonStyle(BorderlessButtonStyle())
 
                     // Button 2: Set Lock Screen
                     Button(action: {
-                        downloader.downloadAndApply(item: item, target: .lockScreen) { success in
-                            if success {
-                                showToast("🔒 Set \"\(item.title)\" as Lock Screen wallpaper!")
-                            }
-                        }
+                        applyWallpaper(item: item, target: .lockScreen)
                     }) {
                         HStack(spacing: 4) {
                             Image(systemName: isLockScreen ? "checkmark.circle.fill" : "lock.fill")
@@ -811,44 +604,37 @@ public struct GalleryView: View {
                         .background(isLockScreen ? Color.purple : Color.purple.opacity(0.15))
                         .foregroundColor(isLockScreen ? .white : .purple)
                         .cornerRadius(6)
+                        .contentShape(Rectangle())
                     }
-                    .buttonStyle(PlainButtonStyle())
+                    .buttonStyle(BorderlessButtonStyle())
 
-                    // Button 3: Configuration (Time Scale / Speed / Audio)
+                    // Button 3: Configuration (Opens right sidebar for this item)
                     Button(action: {
-                        configuringItem = item
+                        openConfig(for: item)
                     }) {
                         Image(systemName: "slider.horizontal.3")
                             .font(.system(size: 12, weight: .semibold))
                             .frame(width: 26, height: 26)
-                            .background(Color(NSColor.controlBackgroundColor))
+                            .background(isConfiguringThis ? Color.accentColor : Color(NSColor.controlBackgroundColor))
+                            .foregroundColor(isConfiguringThis ? .white : .primary)
                             .cornerRadius(6)
+                            .contentShape(Rectangle())
                     }
-                    .buttonStyle(PlainButtonStyle())
-                    .help("Configure Playback Speed (Time Scale), Audio, and Scaling")
+                    .buttonStyle(BorderlessButtonStyle())
+                    .help("Open configuration in Right Sidebar")
 
                     // Button 4: More actions menu
                     Menu {
-                        Button(action: {
-                            downloader.downloadAndApply(item: item, target: .both) { success in
-                                if success {
-                                    showToast("✨ Set \"\(item.title)\" for Both Desktop & Lock Screen!")
-                                }
-                            }
-                        }) {
+                        Button(action: { applyWallpaper(item: item, target: .both) }) {
                             Label("Set Both Desktop & Lock Screen", systemImage: "sparkles")
                         }
 
-                        Button(action: {
-                            configuringItem = item
-                        }) {
-                            Label("Configure Wallpaper Settings...", systemImage: "gearshape")
+                        Button(action: { openConfig(for: item) }) {
+                            Label("Configure in Right Sidebar...", systemImage: "gearshape")
                         }
 
                         if !item.isLocalCopy {
-                            Button(action: {
-                                NSWorkspace.shared.open(item.downloadURL)
-                            }) {
+                            Button(action: { NSWorkspace.shared.open(item.downloadURL) }) {
                                 Label("Open Source Webpage", systemImage: "arrow.up.right.square")
                             }
                         }
@@ -877,8 +663,601 @@ public struct GalleryView: View {
         .cornerRadius(12)
         .overlay(
             RoundedRectangle(cornerRadius: 12)
-                .stroke(isDesktop || isLockScreen ? Color.accentColor.opacity(0.5) : Color.gray.opacity(0.15), lineWidth: 1)
+                .stroke(isConfiguringThis ? Color.accentColor : (isDesktop || isLockScreen ? Color.accentColor.opacity(0.5) : Color.gray.opacity(0.15)), lineWidth: isConfiguringThis ? 2 : 1)
         )
+    }
+
+    private func applyWallpaper(item: CatalogItem, target: WallpaperDownloader.ApplyTarget) {
+        let label = (target == .desktop) ? "Desktop" : (target == .lockScreen ? "Lock Screen" : "Both")
+        applyingItemIds[item.id] = label
+
+        downloader.downloadAndApply(item: item, target: target) { success in
+            applyingItemIds.removeValue(forKey: item.id)
+            if success {
+                showToast("✨ Set \"\(item.title)\" as \(label)!")
+                refreshTrigger = UUID()
+            } else {
+                showToast("⚠️ Failed to set \(label). Check internet connection.")
+            }
+        }
+    }
+
+    private func openConfig(for item: CatalogItem) {
+        selectedItem = item
+        selectedTargetMode = 2
+        itemRate = WallpaperEngine.shared.getPlaybackRate(for: item.id)
+        itemVolume = WallpaperEngine.shared.getVolume(for: item.id)
+        withAnimation {
+            isInspectorVisible = true
+        }
+    }
+
+    // MARK: - 3. Right Sidebar (Previews at Top + Detached Configuration Below)
+
+    private var desktopItem: WallpaperItem? {
+        _ = refreshTrigger
+        return WallpaperEngine.shared.currentDesktopWallpaper
+    }
+
+    private var lockScreenItem: WallpaperItem? {
+        _ = refreshTrigger
+        return WallpaperEngine.shared.currentLockScreenWallpaper
+    }
+
+    private var currentDesktopTitle: String {
+        desktopItem?.title ??
+            UserDefaults.standard.string(forKey: "WallpaperEngine.desktopWallpaperTitle") ??
+            "Kirby Floating on Pond"
+    }
+
+    private var currentLockScreenTitle: String {
+        lockScreenItem?.title ??
+            UserDefaults.standard.string(forKey: "WallpaperEngine.lockScreenWallpaperTitle") ??
+            "Abi Toads (Original)"
+    }
+
+    private var rightSidebarView: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                // Header of Right Sidebar
+                HStack {
+                    Label("ACTIVE DISPLAYS", systemImage: "display.2")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Button(action: { withAnimation { isInspectorVisible = false } }) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(.secondary)
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                }
+                .padding(.top, 14)
+
+                // 1. Desktop Mini Preview (TOP)
+                miniDesktopRenderBox
+
+                // 2. Lock Screen Mini Preview (TOP)
+                miniLockScreenRenderBox
+
+                Divider()
+                    .padding(.vertical, 4)
+
+                // 3. Detached Configuration Controls
+                detachedConfigurationPanel
+            }
+            .padding(.horizontal, 14)
+            .padding(.bottom, 20)
+        }
+    }
+
+    // Rendered Desktop Box (Permanently at top of Right Sidebar)
+    private var miniDesktopRenderBox: some View {
+        let stillImg = WallpaperEngine.shared.stillFrameImage(for: desktopItem)
+        let isPlaying = WallpaperEngine.shared.isPlaying
+        let isSelected = (selectedTargetMode == 0)
+
+        return VStack(spacing: 4) {
+            ZStack(alignment: .topLeading) {
+                if let img = stillImg {
+                    Image(nsImage: img)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: 272, height: 115)
+                        .clipped()
+                } else {
+                    LinearGradient(
+                        colors: [Color.blue.opacity(0.8), Color.purple.opacity(0.8)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                    .frame(width: 272, height: 115)
+                }
+
+                // Top Badges
+                HStack {
+                    HStack(spacing: 3) {
+                        Image(systemName: "display")
+                        Text("Desktop")
+                    }
+                    .font(.system(size: 9, weight: .bold))
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(Color.blue)
+                    .foregroundColor(.white)
+                    .cornerRadius(4)
+
+                    Spacer()
+
+                    // Play/Pause button
+                    Button(action: {
+                        WallpaperEngine.shared.togglePlayPause()
+                        refreshTrigger = UUID()
+                    }) {
+                        Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                            .font(.system(size: 16))
+                            .foregroundColor(.white)
+                            .shadow(radius: 2)
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                }
+                .padding(6)
+
+                // Bottom title and speed badge
+                VStack {
+                    Spacer()
+                    HStack {
+                        Text(currentDesktopTitle)
+                            .font(.system(size: 10, weight: .bold))
+                            .lineLimit(1)
+                            .foregroundColor(.white)
+                            .shadow(color: .black.opacity(0.8), radius: 2)
+                        Spacer()
+                        Text(String(format: "%.2fx", desktopRate))
+                            .font(.system(size: 9, weight: .bold, design: .monospaced))
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(Color.black.opacity(0.6))
+                            .foregroundColor(.white)
+                            .cornerRadius(3)
+                    }
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 4)
+                    .background(
+                        LinearGradient(
+                            colors: [Color.clear, Color.black.opacity(0.75)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                }
+            }
+            .frame(width: 272, height: 115)
+            .cornerRadius(8)
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(isSelected ? Color.blue : Color.blue.opacity(0.3), lineWidth: isSelected ? 2 : 1)
+            )
+            .contentShape(Rectangle())
+            .onTapGesture {
+                selectedTargetMode = 0
+            }
+
+            // Quick Select / Configure Button
+            Button(action: { selectedTargetMode = 0 }) {
+                HStack {
+                    Image(systemName: isSelected ? "checkmark.circle.fill" : "slider.horizontal.3")
+                    Text(isSelected ? "Configuring Desktop Speed" : "Configure Desktop Speed")
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 9))
+                }
+                .font(.system(size: 11, weight: isSelected ? .bold : .regular))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(isSelected ? Color.blue.opacity(0.15) : Color(NSColor.separatorColor).opacity(0.1))
+                .foregroundColor(isSelected ? .blue : .secondary)
+                .cornerRadius(5)
+            }
+            .buttonStyle(PlainButtonStyle())
+        }
+    }
+
+    // Rendered Lock Screen Box (Permanently at top of Right Sidebar)
+    private var miniLockScreenRenderBox: some View {
+        let stillImg = WallpaperEngine.shared.stillFrameImage(for: lockScreenItem)
+        let isSelected = (selectedTargetMode == 1)
+
+        return VStack(spacing: 4) {
+            ZStack(alignment: .topLeading) {
+                if let img = stillImg {
+                    Image(nsImage: img)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: 272, height: 95)
+                        .clipped()
+                } else {
+                    LinearGradient(
+                        colors: [Color.purple.opacity(0.8), Color.indigo.opacity(0.8)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                    .frame(width: 272, height: 95)
+                }
+
+                // Top Badge
+                HStack {
+                    HStack(spacing: 3) {
+                        Image(systemName: "lock.fill")
+                        Text("Lock Screen")
+                    }
+                    .font(.system(size: 9, weight: .bold))
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(Color.purple)
+                    .foregroundColor(.white)
+                    .cornerRadius(4)
+
+                    Spacer()
+                }
+                .padding(6)
+
+                // Bottom title and rate badge
+                VStack {
+                    Spacer()
+                    HStack {
+                        Text(currentLockScreenTitle)
+                            .font(.system(size: 10, weight: .bold))
+                            .lineLimit(1)
+                            .foregroundColor(.white)
+                            .shadow(color: .black.opacity(0.8), radius: 2)
+                        Spacer()
+                        Text(String(format: "%.2fx", lockScreenRate))
+                            .font(.system(size: 9, weight: .bold, design: .monospaced))
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(Color.black.opacity(0.6))
+                            .foregroundColor(.white)
+                            .cornerRadius(3)
+                    }
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 4)
+                    .background(
+                        LinearGradient(
+                            colors: [Color.clear, Color.black.opacity(0.75)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                }
+            }
+            .frame(width: 272, height: 95)
+            .cornerRadius(8)
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(isSelected ? Color.purple : Color.purple.opacity(0.3), lineWidth: isSelected ? 2 : 1)
+            )
+            .contentShape(Rectangle())
+            .onTapGesture {
+                selectedTargetMode = 1
+            }
+
+            // Quick Select / Configure Button
+            Button(action: { selectedTargetMode = 1 }) {
+                HStack {
+                    Image(systemName: isSelected ? "checkmark.circle.fill" : "slider.horizontal.3")
+                    Text(isSelected ? "Configuring Lock Screen Speed" : "Configure Lock Screen Speed")
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 9))
+                }
+                .font(.system(size: 11, weight: isSelected ? .bold : .regular))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(isSelected ? Color.purple.opacity(0.15) : Color(NSColor.separatorColor).opacity(0.1))
+                .foregroundColor(isSelected ? .purple : .secondary)
+                .cornerRadius(5)
+            }
+            .buttonStyle(PlainButtonStyle())
+        }
+    }
+
+    // Detached Configuration Panel
+    private var detachedConfigurationPanel: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            // Target Selector (Desktop / Lock Screen / Selected Wallpaper)
+            VStack(alignment: .leading, spacing: 6) {
+                Text("CONFIGURATION TARGET")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundColor(.secondary)
+
+                Picker("", selection: $selectedTargetMode) {
+                    Text("Desktop").tag(0)
+                    Text("Lock Screen").tag(1)
+                    if let s = selectedItem {
+                        Text(s.title.prefix(8) + "...").tag(2)
+                    }
+                }
+                .pickerStyle(SegmentedPickerStyle())
+            }
+
+            // Controls based on selectedTargetMode
+            if selectedTargetMode == 0 {
+                desktopConfigControls
+            } else if selectedTargetMode == 1 {
+                lockScreenConfigControls
+            } else if selectedTargetMode == 2, let item = selectedItem {
+                itemConfigControls(item: item)
+            }
+        }
+        .padding(12)
+        .background(Color(NSColor.controlBackgroundColor).opacity(0.6))
+        .cornerRadius(10)
+    }
+
+    // 1. Desktop Controls (Detached)
+    private var desktopConfigControls: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("🖥️ Desktop Time Scale")
+                    .font(.system(size: 12, weight: .bold))
+                Spacer()
+                Text(String(format: "%.2fx", desktopRate))
+                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.blue.opacity(0.15))
+                    .foregroundColor(.blue)
+                    .cornerRadius(4)
+            }
+
+            Text("Adjust live animation speed independently for Desktop (detached from Lock Screen).")
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+
+            Slider(value: $desktopRate, in: 0.25...2.50, step: 0.05) { editing in
+                if !editing {
+                    WallpaperEngine.shared.desktopPlaybackRate = desktopRate
+                }
+            }
+            .onChange(of: desktopRate) { newRate in
+                WallpaperEngine.shared.desktopPlaybackRate = newRate
+            }
+
+            // Presets
+            HStack(spacing: 3) {
+                ForEach(ratePresets, id: \.self) { p in
+                    Button(action: {
+                        desktopRate = p
+                        WallpaperEngine.shared.desktopPlaybackRate = p
+                    }) {
+                        Text(String(format: "%.1fx", p))
+                            .font(.system(size: 9, weight: abs(desktopRate - p) < 0.05 ? .bold : .regular))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 3)
+                            .background(abs(desktopRate - p) < 0.05 ? Color.blue : Color(NSColor.separatorColor).opacity(0.2))
+                            .foregroundColor(abs(desktopRate - p) < 0.05 ? .white : .primary)
+                            .cornerRadius(4)
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                }
+            }
+
+            Divider()
+
+            // Desktop Audio Volume
+            HStack {
+                Label("Audio Volume", systemImage: desktopVolume == 0 ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                    .font(.system(size: 11, weight: .semibold))
+                Spacer()
+                Text(desktopVolume == 0 ? "Muted" : "\(Int(desktopVolume * 100))%")
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+            }
+
+            HStack(spacing: 8) {
+                Button(action: {
+                    desktopVolume = (desktopVolume > 0) ? 0.0 : 1.0
+                    WallpaperEngine.shared.setVolume(desktopVolume)
+                }) {
+                    Image(systemName: desktopVolume == 0 ? "speaker.slash" : "speaker.wave.2")
+                        .font(.system(size: 11))
+                }
+                .buttonStyle(PlainButtonStyle())
+
+                Slider(value: $desktopVolume, in: 0.0...1.0, step: 0.05) { editing in
+                    if !editing {
+                        WallpaperEngine.shared.setVolume(desktopVolume)
+                    }
+                }
+                .onChange(of: desktopVolume) { newVol in
+                    WallpaperEngine.shared.setVolume(newVol)
+                }
+            }
+
+            Divider()
+
+            // Scaling Mode
+            Text("Scaling Mode")
+                .font(.system(size: 11, weight: .semibold))
+
+            Picker("", selection: $scalingMode) {
+                ForEach(WallpaperScalingMode.allCases, id: \.self) { mode in
+                    Text(mode.rawValue).tag(mode)
+                }
+            }
+            .pickerStyle(SegmentedPickerStyle())
+            .onChange(of: scalingMode) { newMode in
+                WallpaperEngine.shared.scalingMode = newMode
+            }
+        }
+    }
+
+    // 2. Lock Screen Controls (Detached)
+    private var lockScreenConfigControls: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("🔒 Lock Screen Time Scale")
+                    .font(.system(size: 12, weight: .bold))
+                Spacer()
+                Text(String(format: "%.2fx", lockScreenRate))
+                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.purple.opacity(0.15))
+                    .foregroundColor(.purple)
+                    .cornerRadius(4)
+            }
+
+            Text("Adjust speed independently for Lock Screen (detached from Desktop).")
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+
+            Slider(value: $lockScreenRate, in: 0.25...2.50, step: 0.05) { editing in
+                if !editing {
+                    WallpaperEngine.shared.lockScreenPlaybackRate = lockScreenRate
+                }
+            }
+            .onChange(of: lockScreenRate) { newRate in
+                WallpaperEngine.shared.lockScreenPlaybackRate = newRate
+            }
+
+            // Presets
+            HStack(spacing: 3) {
+                ForEach(ratePresets, id: \.self) { p in
+                    Button(action: {
+                        lockScreenRate = p
+                        WallpaperEngine.shared.lockScreenPlaybackRate = p
+                    }) {
+                        Text(String(format: "%.1fx", p))
+                            .font(.system(size: 9, weight: abs(lockScreenRate - p) < 0.05 ? .bold : .regular))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 3)
+                            .background(abs(lockScreenRate - p) < 0.05 ? Color.purple : Color(NSColor.separatorColor).opacity(0.2))
+                            .foregroundColor(abs(lockScreenRate - p) < 0.05 ? .white : .primary)
+                            .cornerRadius(4)
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                }
+            }
+        }
+    }
+
+    // 3. Selected Wallpaper Item Controls
+    private func itemConfigControls(item: CatalogItem) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                ThumbnailImageView(item: item)
+                    .frame(width: 50, height: 35)
+                    .cornerRadius(4)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(item.title)
+                        .font(.system(size: 11, weight: .bold))
+                        .lineLimit(1)
+                    Text(item.category)
+                        .font(.system(size: 9))
+                        .foregroundColor(.secondary)
+                }
+                Spacer()
+            }
+
+            HStack {
+                Text("Custom Time Scale")
+                    .font(.system(size: 11, weight: .bold))
+                Spacer()
+                Text(String(format: "%.2fx", itemRate))
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1)
+                    .background(Color.accentColor.opacity(0.15))
+                    .foregroundColor(.accentColor)
+                    .cornerRadius(4)
+            }
+
+            Slider(value: $itemRate, in: 0.25...2.50, step: 0.05) { editing in
+                if !editing {
+                    WallpaperEngine.shared.setPlaybackRate(itemRate, for: item.id)
+                }
+            }
+            .onChange(of: itemRate) { newRate in
+                WallpaperEngine.shared.setPlaybackRate(newRate, for: item.id)
+            }
+
+            // Presets
+            HStack(spacing: 3) {
+                ForEach(ratePresets, id: \.self) { p in
+                    Button(action: {
+                        itemRate = p
+                        WallpaperEngine.shared.setPlaybackRate(p, for: item.id)
+                    }) {
+                        Text(String(format: "%.1fx", p))
+                            .font(.system(size: 9, weight: abs(itemRate - p) < 0.05 ? .bold : .regular))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 3)
+                            .background(abs(itemRate - p) < 0.05 ? Color.accentColor : Color(NSColor.separatorColor).opacity(0.2))
+                            .foregroundColor(abs(itemRate - p) < 0.05 ? .white : .primary)
+                            .cornerRadius(4)
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                }
+            }
+
+            Divider()
+
+            // Apply buttons
+            VStack(spacing: 6) {
+                Button(action: {
+                    WallpaperEngine.shared.setPlaybackRate(itemRate, for: item.id)
+                    applyWallpaper(item: item, target: .desktop)
+                }) {
+                    HStack {
+                        Image(systemName: "display")
+                        Text("Apply to Desktop at \(String(format: "%.2fx", itemRate))")
+                    }
+                    .font(.system(size: 11, weight: .semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 6)
+                    .background(Color.blue)
+                    .foregroundColor(.white)
+                    .cornerRadius(6)
+                }
+                .buttonStyle(PlainButtonStyle())
+
+                Button(action: {
+                    WallpaperEngine.shared.setPlaybackRate(itemRate, for: item.id)
+                    applyWallpaper(item: item, target: .lockScreen)
+                }) {
+                    HStack {
+                        Image(systemName: "lock.fill")
+                        Text("Apply to Lock Screen at \(String(format: "%.2fx", itemRate))")
+                    }
+                    .font(.system(size: 11, weight: .semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 6)
+                    .background(Color.purple)
+                    .foregroundColor(.white)
+                    .cornerRadius(6)
+                }
+                .buttonStyle(PlainButtonStyle())
+
+                Button(action: {
+                    WallpaperEngine.shared.setPlaybackRate(itemRate, for: item.id)
+                    applyWallpaper(item: item, target: .both)
+                }) {
+                    HStack {
+                        Image(systemName: "sparkles")
+                        Text("Apply to Both at \(String(format: "%.2fx", itemRate))")
+                    }
+                    .font(.system(size: 11, weight: .semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 6)
+                    .background(Color.indigo)
+                    .foregroundColor(.white)
+                    .cornerRadius(6)
+                }
+                .buttonStyle(PlainButtonStyle())
+            }
+        }
     }
 
     private func sourceBadgeColor(for source: String) -> Color {
@@ -1118,6 +1497,6 @@ public struct GalleryView: View {
         .background(Color(NSColor.controlBackgroundColor))
         .cornerRadius(16)
         .shadow(radius: 5)
-        .padding(.bottom, 12)
+        .padding(.bottom, 16)
     }
 }

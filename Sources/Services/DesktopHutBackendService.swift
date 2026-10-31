@@ -108,13 +108,24 @@ public final class DesktopHutBackendService {
         guard let (data, _) = try? await URLSession.shared.data(for: request),
               let html = String(data: data, encoding: .utf8) else { return nil }
 
-        // Find primaryDownloadBtn href
-        let pattern = #"id="primaryDownloadBtn"[^>]*href="([^"]+)""#
-        if let regex = try? NSRegularExpression(pattern: pattern),
+        // 1. Find primaryDownloadBtn href
+        let pattern1 = #"id="primaryDownloadBtn"[^>]*href="([^"]+)""#
+        if let regex = try? NSRegularExpression(pattern: pattern1),
            let match = regex.firstMatch(in: html, range: NSRange(html.startIndex..., in: html)),
            let r = Range(match.range(at: 1), in: html) {
-            return URL(string: String(html[r]))
+            let link = String(html[r])
+            if let u = URL(string: link) { return u }
         }
+
+        // 2. Find any https://www.desktophut.com/files/XXXXX.mp4 link
+        let pattern2 = #"https://(?:www\.)?desktophut\.com/files/[^"\s\\]+\.mp4"#
+        if let regex = try? NSRegularExpression(pattern: pattern2),
+           let match = regex.firstMatch(in: html, range: NSRange(html.startIndex..., in: html)),
+           let r = Range(match.range(at: 0), in: html) {
+            let link = String(html[r])
+            if let u = URL(string: link) { return u }
+        }
+
         return nil
     }
 }

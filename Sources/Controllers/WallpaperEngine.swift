@@ -71,30 +71,79 @@ public final class WallpaperEngine: NSObject {
         }
     }
 
-    // MARK: - Playback Speed & Volume Configuration
+    // MARK: - Playback Speed & Volume Configuration (Detached for Desktop & Lock Screen)
+
+    public var desktopPlaybackRate: Double {
+        get {
+            let val = UserDefaults.standard.double(forKey: "WallpaperEngine.desktopPlaybackRate")
+            if val >= 0.1 { return val }
+            if let id = currentDesktopWallpaper?.id {
+                let idVal = UserDefaults.standard.double(forKey: "WallpaperEngine.rate.\(id)")
+                if idVal >= 0.1 { return idVal }
+            }
+            return 1.0
+        }
+        set {
+            let safe = max(0.1, min(newValue, 3.0))
+            UserDefaults.standard.set(safe, forKey: "WallpaperEngine.desktopPlaybackRate")
+            if let id = currentDesktopWallpaper?.id {
+                UserDefaults.standard.set(safe, forKey: "WallpaperEngine.rate.\(id)")
+            }
+            for session in sessions {
+                if isPlaying && !isSystemSleeping {
+                    session.player?.rate = Float(safe)
+                }
+            }
+            notifyStateChange()
+        }
+    }
+
+    public var lockScreenPlaybackRate: Double {
+        get {
+            let val = UserDefaults.standard.double(forKey: "WallpaperEngine.lockScreenPlaybackRate")
+            if val >= 0.1 { return val }
+            if let id = currentLockScreenWallpaper?.id {
+                let idVal = UserDefaults.standard.double(forKey: "WallpaperEngine.rate.\(id)")
+                if idVal >= 0.1 { return idVal }
+            }
+            return 1.0
+        }
+        set {
+            let safe = max(0.1, min(newValue, 3.0))
+            UserDefaults.standard.set(safe, forKey: "WallpaperEngine.lockScreenPlaybackRate")
+            if let id = currentLockScreenWallpaper?.id {
+                UserDefaults.standard.set(safe, forKey: "WallpaperEngine.rate.\(id)")
+            }
+            notifyStateChange()
+        }
+    }
 
     public var currentPlaybackRate: Double {
-        return getPlaybackRate(for: currentDesktopWallpaper?.id)
+        return desktopPlaybackRate
     }
 
     public func getPlaybackRate(for wallpaperId: String? = nil) -> Double {
-        let id = wallpaperId ?? currentDesktopWallpaper?.id ?? "global"
-        let val = UserDefaults.standard.double(forKey: "WallpaperEngine.rate.\(id)")
-        return val >= 0.1 ? val : 1.0
+        if let id = wallpaperId {
+            let val = UserDefaults.standard.double(forKey: "WallpaperEngine.rate.\(id)")
+            return val >= 0.1 ? val : 1.0
+        }
+        return desktopPlaybackRate
     }
 
     public func setPlaybackRate(_ rate: Double, for wallpaperId: String? = nil) {
-        let id = wallpaperId ?? currentDesktopWallpaper?.id ?? "global"
         let safeRate = max(0.1, min(rate, 3.0))
-        UserDefaults.standard.set(safeRate, forKey: "WallpaperEngine.rate.\(id)")
-
-        // Apply immediately to active sessions if setting for active desktop wallpaper
-        if wallpaperId == nil || wallpaperId == currentDesktopWallpaper?.id {
-            for session in sessions {
-                if isPlaying && !isSystemSleeping {
-                    session.player?.rate = Float(safeRate)
-                }
+        if let id = wallpaperId {
+            UserDefaults.standard.set(safeRate, forKey: "WallpaperEngine.rate.\(id)")
+            if id == currentDesktopWallpaper?.id {
+                desktopPlaybackRate = safeRate
+                return
+            } else if id == currentLockScreenWallpaper?.id {
+                lockScreenPlaybackRate = safeRate
+                return
             }
+        } else {
+            desktopPlaybackRate = safeRate
+            return
         }
         notifyStateChange()
     }
