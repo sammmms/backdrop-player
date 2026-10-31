@@ -4,115 +4,200 @@ import AppKit
 public final class CatalogService {
     public static let shared = CatalogService()
 
+    public static let availableMarketplaces: [String] = [
+        "🌐 All Marketplaces",
+        "🔥 Steam Workshop",
+        "🌸 MoeWalls (Anime & Aesthetic)",
+        "⚡ DesktopHut (4K PC)",
+        "🪐 Wallpaper Engine Space",
+        "🍏 Apple Aerials 4K",
+        "🎬 Backdrop Collection",
+        "💾 Downloaded / Ready",
+        "🔗 Custom Video URL"
+    ]
+
+    public static let availableCategories: [String] = [
+        "All Categories",
+        "Anime & Manga",
+        "Gaming",
+        "Sci-Fi & Cyberpunk",
+        "Nature & Space",
+        "Lofi & Aesthetic",
+        "Cars & Vehicles",
+        "Fantasy & Abstract"
+    ]
+
     private init() {}
 
     public func fetchCatalog() -> [CatalogItem] {
         var items: [CatalogItem] = []
-
-        // 1. Featured Local Unencrypted Wallpapers (Instant playback)
         items.append(contentsOf: localFeaturedItems)
-
-        // 2. Steam / Wallpaper Engine Space Open Catalog (Direct 4K/1080p MP4 loops + WebP posters)
         items.append(contentsOf: steamWallpaperEngineItems)
-
-        // 3. Backdrop Cached Items (44 on-disk HEIC thumbnails & MOV previews)
         items.append(contentsOf: fetchBackdropCachedItems())
-
-        // 4. Curated Anime, Gaming & Lofi community loops
         items.append(contentsOf: curatedCommunityItems)
-
-        // 5. Apple Aerial 4K Official Cinematic Collection
         items.append(contentsOf: appleAerialItems)
-
         return items
     }
 
-    // MARK: - Live Backend Search & Browse (Steam Workshop API)
+    // MARK: - Multi-Marketplace Live Search & Filter
 
-    public func searchLive(query: String, category: String = "All") async -> [CatalogItem] {
-        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+    public func searchLive(
+        query: String,
+        marketplace: String = "🌐 All Marketplaces",
+        category: String = "All Categories"
+    ) async -> [CatalogItem] {
+        let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        if !trimmed.isEmpty {
-            // Live query to Steam Workshop backend
-            let steamResults = await SteamWorkshopBackendService.shared.search(query: trimmed)
+        switch marketplace {
+        case "🔥 Steam Workshop":
+            let steamQuery = trimmedQuery.isEmpty
+                ? (category == "All Categories" ? "" : categorySteamKeyword(for: category))
+                : trimmedQuery
+            return await SteamWorkshopBackendService.shared.search(query: steamQuery, sort: "trend")
 
-            // Also check local & curated items matching query
-            let localMatches = fetchCatalog().filter {
-                $0.title.localizedCaseInsensitiveContains(trimmed) ||
-                $0.category.localizedCaseInsensitiveContains(trimmed)
-            }
+        case "🌸 MoeWalls (Anime & Aesthetic)":
+            return await MoeWallsBackendService.shared.search(query: trimmedQuery, category: category)
 
-            var merged: [CatalogItem] = []
-            var seen = Set<String>()
+        case "⚡ DesktopHut (4K PC)":
+            return await DesktopHutBackendService.shared.search(query: trimmedQuery, category: category)
 
-            for item in localMatches {
-                seen.insert(item.title.lowercased())
-                merged.append(item)
-            }
-
-            for item in steamResults {
-                if !seen.contains(item.title.lowercased()) {
-                    seen.insert(item.title.lowercased())
-                    merged.append(item)
-                }
-            }
-
-            return merged
-        }
-
-        // Category queries to backend when search text is empty
-        switch category {
-        case "🔥 Steam / Wallpaper Engine", "🔥 Trending Workshop":
-            let trending = await SteamWorkshopBackendService.shared.search(query: "", sort: "trend")
+        case "🪐 Wallpaper Engine Space":
             var list = steamWallpaperEngineItems
-            var seen = Set(list.map { $0.title.lowercased() })
-            for item in trending {
-                if !seen.contains(item.title.lowercased()) {
-                    seen.insert(item.title.lowercased())
-                    list.append(item)
+            if !trimmedQuery.isEmpty {
+                list = list.filter {
+                    $0.title.localizedCaseInsensitiveContains(trimmedQuery) ||
+                    $0.category.localizedCaseInsensitiveContains(trimmedQuery)
                 }
+            }
+            if category != "All Categories" {
+                list = filterByCategory(items: list, category: category)
             }
             return list
 
-        case "Anime & Gaming", "Anime":
-            let anime = await SteamWorkshopBackendService.shared.search(query: "anime")
-            var list = curatedCommunityItems.filter { $0.category.contains("Anime") || $0.category.contains("Gaming") }
-            var seen = Set(list.map { $0.title.lowercased() })
-            for item in anime {
-                if !seen.contains(item.title.lowercased()) {
-                    seen.insert(item.title.lowercased())
-                    list.append(item)
-                }
-            }
-            return list
-
-        case "4K Nature & Space":
-            let nature = await SteamWorkshopBackendService.shared.search(query: "nature")
+        case "🍏 Apple Aerials 4K":
             var list = appleAerialItems
-            var seen = Set(list.map { $0.title.lowercased() })
-            for item in nature {
-                if !seen.contains(item.title.lowercased()) {
-                    seen.insert(item.title.lowercased())
-                    list.append(item)
+            if !trimmedQuery.isEmpty {
+                list = list.filter {
+                    $0.title.localizedCaseInsensitiveContains(trimmedQuery) ||
+                    $0.sourceDescription.localizedCaseInsensitiveContains(trimmedQuery)
                 }
             }
             return list
 
-        case "Sci-Fi & Cyberpunk":
-            return await SteamWorkshopBackendService.shared.search(query: "cyberpunk")
+        case "🎬 Backdrop Collection":
+            var list = localFeaturedItems + fetchBackdropCachedItems()
+            if !trimmedQuery.isEmpty {
+                list = list.filter { $0.title.localizedCaseInsensitiveContains(trimmedQuery) }
+            }
+            if category != "All Categories" {
+                list = filterByCategory(items: list, category: category)
+            }
+            return list
 
-        case "Backdrop Collection":
-            return localFeaturedItems + fetchBackdropCachedItems()
-
-        case "Downloaded / Ready":
+        case "💾 Downloaded / Ready":
             let dir = BackdropLibraryService.shared.localWallpapersDirectory
             let localFiles = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
-            return fetchCatalog().filter { item in
+            var list = fetchCatalog().filter { item in
                 localFiles.contains(where: { $0.lowercased().contains(item.title.lowercased()) }) || item.isLocalCopy
             }
+            if !trimmedQuery.isEmpty {
+                list = list.filter { $0.title.localizedCaseInsensitiveContains(trimmedQuery) }
+            }
+            return list
+
+        case "🔗 Custom Video URL":
+            return []
 
         default:
-            return fetchCatalog()
+            // "🌐 All Marketplaces" (Aggregate across providers)
+            return await aggregateAllMarketplaces(query: trimmedQuery, category: category)
+        }
+    }
+
+    // Backward-compatible overload
+    public func searchLive(query: String, category: String = "All") async -> [CatalogItem] {
+        return await searchLive(query: query, marketplace: "🌐 All Marketplaces", category: category)
+    }
+
+    private func aggregateAllMarketplaces(query: String, category: String) async -> [CatalogItem] {
+        async let steamTask = SteamWorkshopBackendService.shared.search(
+            query: query.isEmpty ? (category == "All Categories" ? "" : categorySteamKeyword(for: category)) : query,
+            sort: "trend"
+        )
+        async let moeTask = MoeWallsBackendService.shared.search(query: query, category: category)
+        async let dhTask = DesktopHutBackendService.shared.search(query: query, category: category)
+
+        let (steam, moe, dh) = await (steamTask, moeTask, dhTask)
+
+        // Also match local and curated items
+        var localMatches = fetchCatalog()
+        if !query.isEmpty {
+            localMatches = localMatches.filter {
+                $0.title.localizedCaseInsensitiveContains(query) ||
+                $0.category.localizedCaseInsensitiveContains(query)
+            }
+        }
+        if category != "All Categories" {
+            localMatches = filterByCategory(items: localMatches, category: category)
+        }
+
+        var merged: [CatalogItem] = []
+        var seen = Set<String>()
+
+        // Interleave top results for varied marketplace experience
+        let maxCount = max(steam.count, max(moe.count, max(dh.count, localMatches.count)))
+        for i in 0..<maxCount {
+            if i < steam.count {
+                let it = steam[i]
+                if !seen.contains(it.title.lowercased()) {
+                    seen.insert(it.title.lowercased())
+                    merged.append(it)
+                }
+            }
+            if i < moe.count {
+                let it = moe[i]
+                if !seen.contains(it.title.lowercased()) {
+                    seen.insert(it.title.lowercased())
+                    merged.append(it)
+                }
+            }
+            if i < dh.count {
+                let it = dh[i]
+                if !seen.contains(it.title.lowercased()) {
+                    seen.insert(it.title.lowercased())
+                    merged.append(it)
+                }
+            }
+            if i < localMatches.count {
+                let it = localMatches[i]
+                if !seen.contains(it.title.lowercased()) {
+                    seen.insert(it.title.lowercased())
+                    merged.append(it)
+                }
+            }
+        }
+
+        return merged
+    }
+
+    private func categorySteamKeyword(for category: String) -> String {
+        switch category {
+        case "Anime & Manga": return "anime"
+        case "Gaming": return "game"
+        case "Sci-Fi & Cyberpunk": return "cyberpunk"
+        case "Nature & Space": return "nature"
+        case "Lofi & Aesthetic": return "lofi"
+        case "Cars & Vehicles": return "car"
+        case "Fantasy & Abstract": return "fantasy"
+        default: return ""
+        }
+    }
+
+    private func filterByCategory(items: [CatalogItem], category: String) -> [CatalogItem] {
+        let kw = categorySteamKeyword(for: category)
+        return items.filter {
+            $0.category.localizedCaseInsensitiveContains(kw) ||
+            $0.title.localizedCaseInsensitiveContains(kw)
         }
     }
 
@@ -123,61 +208,57 @@ public final class CatalogService {
         let stillsDir = localDir.appendingPathComponent(".stills")
 
         let defs: [(title: String, file: String, still: String, res: String, size: String, cat: String)] = [
-            ("Abi Toads (Rainy Day)", "Abi Toads.mov", "Abi Toads.jpg", "4K 60fps", "138 MB", "Backdrop Collection"),
-            ("Kirby Floating on Pond", "Kirby Floating on Pond.mov", "Kirby Floating on Pond.jpg", "1080p 60fps", "12.7 MB", "Anime & Gaming"),
-            ("Dancing Petals", "Dancing Petals.mov", "Dancing Petals.jpg", "1080p 60fps", "10.1 MB", "Lofi & Aesthetic"),
-            ("Room in the forest", "Room in the forest.mov", "Room in the forest.jpg", "4K 60fps", "136 MB", "Lofi & Aesthetic")
+            ("Kirby Floating on Pond", "Kirby Floating on Pond.mov", "Kirby Floating on Pond.heic", "Full HD", "37 MB", "Backdrop Collection"),
+            ("Abi Toads (Original)", "Abi Toads.mov", "Abi Toads.heic", "Full HD", "46 MB", "Backdrop Collection"),
+            ("Dancing Petals", "Dancing Petals.mov", "Dancing Petals.heic", "Full HD", "42 MB", "Backdrop Collection"),
+            ("Room in the Forest", "Room in the forest.mov", "Room in the forest.heic", "Full HD", "34 MB", "Backdrop Collection")
         ]
 
-        var items: [CatalogItem] = []
-        for d in defs {
-            let videoURL = localDir.appendingPathComponent(d.file)
-            guard FileManager.default.fileExists(atPath: videoURL.path) else { continue }
+        return defs.compactMap { def in
+            let videoURL = localDir.appendingPathComponent(def.file)
+            let stillURL = stillsDir.appendingPathComponent(def.still)
 
-            let stillURL = stillsDir.appendingPathComponent(d.still)
-            let thumb = FileManager.default.fileExists(atPath: stillURL.path) ? stillURL : videoURL
+            guard FileManager.default.fileExists(atPath: videoURL.path) else { return nil }
+            let thumb = FileManager.default.fileExists(atPath: stillURL.path) ? stillURL : nil
 
-            items.append(
-                CatalogItem(
-                    id: "local-\(d.title)",
-                    title: d.title,
-                    category: d.cat,
-                    thumbnailURL: thumb,
-                    previewURL: videoURL,
-                    downloadURL: videoURL,
-                    resolution: d.res,
-                    fileSizeString: d.size,
-                    sourceDescription: "Ready on Mac",
-                    isLocalCopy: true
-                )
+            return CatalogItem(
+                id: "feat-\(def.title)",
+                title: def.title,
+                category: def.cat,
+                thumbnailURL: thumb,
+                previewURL: videoURL,
+                downloadURL: videoURL,
+                resolution: def.res,
+                fileSizeString: def.size,
+                sourceDescription: "Pre-installed Asset",
+                isLocalCopy: true
             )
         }
-        return items
     }
 
-    // MARK: - Steam / Wallpaper Engine Space Open Catalog
+    // MARK: - Steam / Wallpaper Engine Space Items (4K/60fps)
 
     public var steamWallpaperEngineItems: [CatalogItem] {
         let baseVideo = "https://media.wallpaperengine.space/wallpapers/v1"
         let basePoster = "https://media.wallpaperengine.space/posters/v1"
 
         let list: [(slug: String, title: String, cat: String, res: String, size: String, source: String)] = [
-            ("blossom-tree-through-a-roof", "Blossom Tree Through a Roof", "Steam / Wallpaper Engine", "4K UHD", "2.2 MB", "Wallpaper Engine Space"),
-            ("white-porsche-gt3-rs-cherry-blossoms", "White Porsche GT3 RS (Cherry Blossoms)", "Steam / Wallpaper Engine", "4K 60fps", "6.8 MB", "Wallpaper Engine Space"),
-            ("elaina-window-day-night-wandering-witch", "Elaina Window Day & Night (Wandering Witch)", "Steam / Wallpaper Engine", "1080p 60fps", "14.2 MB", "Wallpaper Engine Space"),
-            ("frieren-snowy-eye-tracking", "Frieren in Falling Snow (Eye Tracking)", "Steam / Wallpaper Engine", "4K UHD", "18.5 MB", "Wallpaper Engine Space"),
-            ("blade-runner-2049", "Blade Runner 2049 (Cyberpunk City)", "Steam / Wallpaper Engine", "4K UHD", "12.0 MB", "Wallpaper Engine Space"),
-            ("atri-sunflower-meadow-my-dear-moments", "Atri Sunflower Meadow (My Dear Moments)", "Steam / Wallpaper Engine", "1080p 60fps", "8.4 MB", "Wallpaper Engine Space"),
-            ("lonely-cat-audio-visualizer", "Lonely Cat Audio Visualizer (Night Sky)", "Steam / Wallpaper Engine", "1080p 60fps", "5.1 MB", "Wallpaper Engine Space"),
-            ("hatsune-miku-star-eyes-colorful", "Hatsune Miku (Star Eyes Colorful)", "Steam / Wallpaper Engine", "4K 60fps", "16.7 MB", "Wallpaper Engine Space"),
-            ("winter-night-northern-lights", "Winter Night Northern Lights (Auroras)", "Steam / Wallpaper Engine", "4K UHD", "9.3 MB", "Wallpaper Engine Space"),
-            ("sunlit-overgrown-arches", "Sunlit Overgrown Arches", "Steam / Wallpaper Engine", "4K UHD", "7.8 MB", "Wallpaper Engine Space"),
-            ("yellow-flowers-in-the-wind", "Yellow Flowers in the Wind", "Steam / Wallpaper Engine", "1080p 60fps", "4.5 MB", "Wallpaper Engine Space"),
-            ("petals-of-the-moon", "Petals of the Moon", "Steam / Wallpaper Engine", "4K UHD", "11.2 MB", "Wallpaper Engine Space"),
-            ("ice-princess-frozen-cathedral-wlop", "Ice Princess Frozen Cathedral (WLOP)", "Steam / Wallpaper Engine", "4K 60fps", "15.0 MB", "Wallpaper Engine Space"),
-            ("sakura-tree", "Sakura Tree Blooming (Falling Petals)", "Steam / Wallpaper Engine", "1080p 60fps", "6.2 MB", "Wallpaper Engine Space"),
-            ("cozy-room", "Cozy Lofi Bedroom (Rain Outside)", "Steam / Wallpaper Engine", "1080p 60fps", "4.8 MB", "Wallpaper Engine Space"),
-            ("rainy-night", "Rainy Night Cityscape (Neon Reflections)", "Steam / Wallpaper Engine", "1080p 60fps", "5.4 MB", "Wallpaper Engine Space")
+            ("blossom-tree-through-a-roof", "Blossom Tree Through a Roof", "Nature & Space", "4K UHD", "2.2 MB", "Wallpaper Engine Space"),
+            ("white-porsche-gt3-rs-cherry-blossoms", "White Porsche GT3 RS (Cherry Blossoms)", "Cars & Vehicles", "4K 60fps", "6.8 MB", "Wallpaper Engine Space"),
+            ("elaina-window-day-night-wandering-witch", "Elaina Window Day & Night (Wandering Witch)", "Anime & Manga", "1080p 60fps", "14.2 MB", "Wallpaper Engine Space"),
+            ("frieren-snowy-eye-tracking", "Frieren in Falling Snow (Eye Tracking)", "Anime & Manga", "4K UHD", "18.5 MB", "Wallpaper Engine Space"),
+            ("blade-runner-2049", "Blade Runner 2049 (Cyberpunk City)", "Sci-Fi & Cyberpunk", "4K UHD", "12.0 MB", "Wallpaper Engine Space"),
+            ("atri-sunflower-meadow-my-dear-moments", "Atri Sunflower Meadow (My Dear Moments)", "Anime & Manga", "1080p 60fps", "8.4 MB", "Wallpaper Engine Space"),
+            ("lonely-cat-audio-visualizer", "Lonely Cat Audio Visualizer (Night Sky)", "Lofi & Aesthetic", "1080p 60fps", "5.1 MB", "Wallpaper Engine Space"),
+            ("hatsune-miku-star-eyes-colorful", "Hatsune Miku (Star Eyes Colorful)", "Anime & Manga", "4K 60fps", "16.7 MB", "Wallpaper Engine Space"),
+            ("winter-night-northern-lights", "Winter Night Northern Lights (Auroras)", "Nature & Space", "4K UHD", "9.3 MB", "Wallpaper Engine Space"),
+            ("sunlit-overgrown-arches", "Sunlit Overgrown Arches", "Nature & Space", "4K UHD", "7.8 MB", "Wallpaper Engine Space"),
+            ("yellow-flowers-in-the-wind", "Yellow Flowers in the Wind", "Nature & Space", "1080p 60fps", "4.5 MB", "Wallpaper Engine Space"),
+            ("petals-of-the-moon", "Petals of the Moon", "Fantasy & Abstract", "4K UHD", "11.2 MB", "Wallpaper Engine Space"),
+            ("ice-princess-frozen-cathedral-wlop", "Ice Princess Frozen Cathedral (WLOP)", "Fantasy & Abstract", "4K 60fps", "15.0 MB", "Wallpaper Engine Space"),
+            ("sakura-tree", "Sakura Tree Blooming (Falling Petals)", "Nature & Space", "1080p 60fps", "6.2 MB", "Wallpaper Engine Space"),
+            ("cozy-room", "Cozy Lofi Bedroom (Rain Outside)", "Lofi & Aesthetic", "1080p 60fps", "4.8 MB", "Wallpaper Engine Space"),
+            ("rainy-night", "Rainy Night Cityscape (Neon Reflections)", "Sci-Fi & Cyberpunk", "1080p 60fps", "5.4 MB", "Wallpaper Engine Space")
         ]
 
         return list.map { item in
@@ -220,7 +301,6 @@ public final class CatalogService {
                       !seenTitles.contains(title.lowercased()),
                       let media = item["media"] as? [String: Any] else { continue }
 
-                // Find preview video
                 var previewFileURL: URL?
                 var candidateVideoIDs: [String] = []
                 if let p = media["largePreview"] as? [String: Any], let pid = p["id"] as? String {
@@ -238,7 +318,6 @@ public final class CatalogService {
                     }
                 }
 
-                // If preview video exists on disk, find its real thumbnail
                 if let videoURL = previewFileURL {
                     seenTitles.insert(title.lowercased())
 
@@ -252,28 +331,27 @@ public final class CatalogService {
                     }
 
                     for tid in candidateThumbIDs {
-                        let candidateFile = catalogDir.appendingPathComponent("\(tid).heic")
-                        if FileManager.default.fileExists(atPath: candidateFile.path) {
-                            thumbURL = candidateFile
+                        let f = catalogDir.appendingPathComponent("\(tid)-thumbnail.heic")
+                        if FileManager.default.fileExists(atPath: f.path) {
+                            thumbURL = f
                             break
                         }
                     }
 
-                    let rawCategory = (item["category"] as? String ?? "anime").capitalized
                     let size = (try? videoURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-                    let formattedSize = ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file)
+                    let mb = Double(size) / (1024 * 1024)
 
                     items.append(
                         CatalogItem(
-                            id: "backdrop-\(videoURL.lastPathComponent)",
+                            id: "cache-\(title)",
                             title: title,
-                            category: "Backdrop (\(rawCategory))",
+                            category: "Backdrop Collection",
                             thumbnailURL: thumbURL,
                             previewURL: videoURL,
                             downloadURL: videoURL,
-                            resolution: "Full HD",
-                            fileSizeString: formattedSize,
-                            sourceDescription: "Mac Cache",
+                            resolution: "1080p MOV",
+                            fileSizeString: String(format: "%.1f MB", mb),
+                            sourceDescription: "Backdrop Cache",
                             isLocalCopy: true
                         )
                     )
@@ -292,7 +370,7 @@ public final class CatalogService {
             CatalogItem(
                 id: "comm-gojo-blue-eyes",
                 title: "Gojo Satoru (Infinite Void)",
-                category: "Anime & Gaming",
+                category: "Anime & Manga",
                 thumbnailURL: URL(string: "\(cdnBase)/.previews/jjk/gojo-blue-eyes-jjk.1920x1080.jpg"),
                 previewURL: URL(string: "\(cdnBase)/jjk/gojo-blue-eyes-jjk.1920x1080.mp4"),
                 downloadURL: URL(string: "\(cdnBase)/jjk/gojo-blue-eyes-jjk.1920x1080.mp4")!,
@@ -303,7 +381,7 @@ public final class CatalogService {
             CatalogItem(
                 id: "comm-gojo-neon-nights",
                 title: "Gojo Satoru (Neon Nights)",
-                category: "Anime & Gaming",
+                category: "Anime & Manga",
                 thumbnailURL: URL(string: "\(cdnBase)/.previews/jjk/gojo-neon-nights.1920x1080.jpg"),
                 previewURL: URL(string: "\(cdnBase)/jjk/gojo-neon-nights.1920x1080.mp4"),
                 downloadURL: URL(string: "\(cdnBase)/jjk/gojo-neon-nights.1920x1080.mp4")!,
@@ -314,7 +392,7 @@ public final class CatalogService {
             CatalogItem(
                 id: "comm-mahoraga",
                 title: "Mahoraga (Wheel of Adaptation)",
-                category: "Anime & Gaming",
+                category: "Anime & Manga",
                 thumbnailURL: URL(string: "\(cdnBase)/.previews/jjk/mahoraga-wheel-of-adaptation.1920x1080.jpg"),
                 previewURL: URL(string: "\(cdnBase)/jjk/mahoraga-wheel-of-adaptation.1920x1080.mp4"),
                 downloadURL: URL(string: "\(cdnBase)/jjk/mahoraga-wheel-of-adaptation.1920x1080.mp4")!,
@@ -325,7 +403,7 @@ public final class CatalogService {
             CatalogItem(
                 id: "comm-yae-miko-moonlit",
                 title: "Yae Miko (Moonlit Shrine)",
-                category: "Anime & Gaming",
+                category: "Gaming",
                 thumbnailURL: URL(string: "\(cdnBase)/.previews/genshin/yae-mikos-moonlit.1920x1080.jpg"),
                 previewURL: URL(string: "\(cdnBase)/genshin/yae-mikos-moonlit.1920x1080.mp4"),
                 downloadURL: URL(string: "\(cdnBase)/genshin/yae-mikos-moonlit.1920x1080.mp4")!,
@@ -336,61 +414,39 @@ public final class CatalogService {
             CatalogItem(
                 id: "comm-yae-miko-ambiance",
                 title: "Yae Miko (Enchanted Ambiance)",
-                category: "Anime & Gaming",
+                category: "Gaming",
                 thumbnailURL: URL(string: "\(cdnBase)/.previews/genshin/yae-mikos-enchanted-ambiance.1920x1080.jpg"),
                 previewURL: URL(string: "\(cdnBase)/genshin/yae-mikos-enchanted-ambiance.1920x1080.mp4"),
                 downloadURL: URL(string: "\(cdnBase)/genshin/yae-mikos-enchanted-ambiance.1920x1080.mp4")!,
                 resolution: "1080p 60fps",
                 fileSizeString: "1.5 MB",
                 sourceDescription: "Genshin Impact"
-            ),
-            CatalogItem(
-                id: "comm-mizuki-genshin",
-                title: "Yumemizuki Mizuki (Aesthetic)",
-                category: "Anime & Gaming",
-                thumbnailURL: URL(string: "\(cdnBase)/.previews/genshin/yumemizuki-mizuki-genshin-impact.1920x1080.jpg"),
-                previewURL: URL(string: "\(cdnBase)/genshin/yumemizuki-mizuki-genshin-impact.1920x1080.mp4"),
-                downloadURL: URL(string: "\(cdnBase)/genshin/yumemizuki-mizuki-genshin-impact.1920x1080.mp4")!,
-                resolution: "1080p 60fps",
-                fileSizeString: "9.4 MB",
-                sourceDescription: "Genshin Impact"
-            ),
-            CatalogItem(
-                id: "comm-tears-of-steel",
-                title: "Cyberpunk Lab & Robots",
-                category: "Lofi & Aesthetic",
-                thumbnailURL: nil,
-                previewURL: URL(string: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4"),
-                downloadURL: URL(string: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4")!,
-                resolution: "1080p 60fps",
-                fileSizeString: "35 MB",
-                sourceDescription: "Open Sci-Fi"
             )
         ]
     }
 
-    // MARK: - Apple Aerial 4K Collection
+    // MARK: - Official Apple Aerial 4K Streams
 
-    private var appleAerialItems: [CatalogItem] {
+    public var appleAerialItems: [CatalogItem] {
         return [
             CatalogItem(
-                id: "apple-korea-japan-night",
-                title: "Korea & Japan Night from Space",
-                category: "4K Nature & Space",
+                id: "apple-aurora-borealis",
+                title: "Aurora Borealis & Australis Orbit",
+                category: "Nature & Space",
                 thumbnailURL: nil,
-                previewURL: URL(string: "https://sylvan.apple.com/Aerials/2x/Videos/comp_GMT026_363A_103NC_E1027_KOREA_JAPAN_NIGHT_v18_SDR_PS_20180907_SDR_4K_HEVC.mov"),
-                downloadURL: URL(string: "https://sylvan.apple.com/Aerials/2x/Videos/comp_GMT026_363A_103NC_E1027_KOREA_JAPAN_NIGHT_v18_SDR_PS_20180907_SDR_4K_HEVC.mov")!,
-                resolution: "4K Ultra HD",
+                previewURL: URL(string: "https://sylvan.apple.com/Aerials/2x/Videos/DB_D011_C010_CR_HDR_HEVC.mov"),
+                downloadURL: URL(string: "https://sylvan.apple.com/Aerials/2x/Videos/DB_D011_C010_CR_HDR_HEVC.mov")!,
+                resolution: "4K HDR",
                 fileSizeString: "280 MB",
-                sourceDescription: "Apple Aerial 4K (ISS)"
+                sourceDescription: "Apple Aerial 4K (Space)"
             ),
             CatalogItem(
-                id: "apple-africa-night",
-                title: "Africa Night & Auroras from ISS",
-                category: "4K Nature & Space",
+                id: "apple-iss-africa-night",
+                title: "ISS Crossing Africa at Night",
+                category: "Nature & Space",
                 thumbnailURL: nil,
-                previewURL: URL(string: "https://sylvan.apple.com/Aerials/2x/Videos/comp_GMT312_162NC_139M_1041_AFRICA_NIGHT_v14_SDR_FINAL_20180706_SDR_4K_HEVC.mov"),
-                downloadURL: URL(string: "https://sylvan.apple.com/Aerials/2x/Videos/comp_GMT312_162NC_139M_1041_AFRICA_NIGHT_v14_SDR_FINAL_20180706_SDR_4K_HEVC.mov")!,
+                previewURL: URL(string: "https://sylvan.apple.com/Aerials/2x/Videos/comp_A001_C005_AFRICA_NIGHT_v14_SDR_FINAL_20180706_SDR_4K_HEVC.mov"),
+                downloadURL: URL(string: "https://sylvan.apple.com/Aerials/2x/Videos/comp_A001_C005_AFRICA_NIGHT_v14_SDR_FINAL_20180706_SDR_4K_HEVC.mov")!,
                 resolution: "4K Ultra HD",
                 fileSizeString: "310 MB",
                 sourceDescription: "Apple Aerial 4K (ISS)"
@@ -398,7 +454,7 @@ public final class CatalogService {
             CatalogItem(
                 id: "apple-seals-underwater",
                 title: "Seals Gliding Underwater",
-                category: "4K Nature & Space",
+                category: "Nature & Space",
                 thumbnailURL: nil,
                 previewURL: URL(string: "https://sylvan.apple.com/Aerials/2x/Videos/SE_A016_C009_SDR_20190717_SDR_4K_HEVC.mov"),
                 downloadURL: URL(string: "https://sylvan.apple.com/Aerials/2x/Videos/SE_A016_C009_SDR_20190717_SDR_4K_HEVC.mov")!,
@@ -409,7 +465,7 @@ public final class CatalogService {
             CatalogItem(
                 id: "apple-palau-jellies",
                 title: "Golden Jellyfish Lake (Palau)",
-                category: "4K Nature & Space",
+                category: "Nature & Space",
                 thumbnailURL: nil,
                 previewURL: URL(string: "https://sylvan.apple.com/Aerials/2x/Videos/PA_A001_C007_SDR_20190717_SDR_4K_HEVC.mov"),
                 downloadURL: URL(string: "https://sylvan.apple.com/Aerials/2x/Videos/PA_A001_C007_SDR_20190717_SDR_4K_HEVC.mov")!,
@@ -420,7 +476,7 @@ public final class CatalogService {
             CatalogItem(
                 id: "apple-greenland-glaciers",
                 title: "Greenland Icebergs & Glaciers",
-                category: "4K Nature & Space",
+                category: "Nature & Space",
                 thumbnailURL: nil,
                 previewURL: URL(string: "https://sylvan.apple.com/Aerials/2x/Videos/comp_GL_G002_C002_PSNK_v03_SDR_PS_20180925_SDR_4K_HEVC.mov"),
                 downloadURL: URL(string: "https://sylvan.apple.com/Aerials/2x/Videos/comp_GL_G002_C002_PSNK_v03_SDR_PS_20180925_SDR_4K_HEVC.mov")!,
@@ -431,7 +487,7 @@ public final class CatalogService {
             CatalogItem(
                 id: "apple-london-aerial",
                 title: "London Skyline Dusk Aerial",
-                category: "4K Nature & Space",
+                category: "Nature & Space",
                 thumbnailURL: nil,
                 previewURL: URL(string: "https://sylvan.apple.com/Aerials/2x/Videos/comp_L007_C007_PS_v01_SDR_PS_20180925_SDR_4K_HEVC.mov"),
                 downloadURL: URL(string: "https://sylvan.apple.com/Aerials/2x/Videos/comp_L007_C007_PS_v01_SDR_PS_20180925_SDR_4K_HEVC.mov")!,
@@ -442,7 +498,7 @@ public final class CatalogService {
             CatalogItem(
                 id: "apple-los-angeles",
                 title: "Los Angeles Twilight Freeway",
-                category: "4K Nature & Space",
+                category: "Cars & Vehicles",
                 thumbnailURL: nil,
                 previewURL: URL(string: "https://sylvan.apple.com/Aerials/2x/Videos/comp_LA_A008_C004_ALTB_ED_FROM_FLAME_RETIME_v46_SDR_PS_20180917_SDR_4K_HEVC.mov"),
                 downloadURL: URL(string: "https://sylvan.apple.com/Aerials/2x/Videos/comp_LA_A008_C004_ALTB_ED_FROM_FLAME_RETIME_v46_SDR_PS_20180917_SDR_4K_HEVC.mov")!,
@@ -453,7 +509,7 @@ public final class CatalogService {
             CatalogItem(
                 id: "apple-china-wall",
                 title: "Great Wall of China & Terraces",
-                category: "4K Nature & Space",
+                category: "Nature & Space",
                 thumbnailURL: nil,
                 previewURL: URL(string: "https://sylvan.apple.com/Aerials/2x/Videos/comp_CH_C002_C005_PSNK_v05_SDR_PS_FINAL_20180709_SDR_4K_HEVC.mov"),
                 downloadURL: URL(string: "https://sylvan.apple.com/Aerials/2x/Videos/comp_CH_C002_C005_PSNK_v05_SDR_PS_FINAL_20180709_SDR_4K_HEVC.mov")!,
@@ -464,7 +520,7 @@ public final class CatalogService {
             CatalogItem(
                 id: "apple-sahara-italy",
                 title: "Sahara to Mediterranean Orbit",
-                category: "4K Nature & Space",
+                category: "Nature & Space",
                 thumbnailURL: nil,
                 previewURL: URL(string: "https://sylvan.apple.com/Aerials/2x/Videos/comp_A009_C001_010181A_v09_SDR_PS_FINAL_20180725_SDR_4K_HEVC.mov"),
                 downloadURL: URL(string: "https://sylvan.apple.com/Aerials/2x/Videos/comp_A009_C001_010181A_v09_SDR_PS_FINAL_20180725_SDR_4K_HEVC.mov")!,

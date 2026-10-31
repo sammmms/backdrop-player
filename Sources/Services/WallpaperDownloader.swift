@@ -4,7 +4,7 @@ import Combine
 public final class WallpaperDownloader: NSObject, ObservableObject, URLSessionDownloadDelegate {
     public static let shared = WallpaperDownloader()
 
-    public enum ApplyTarget {
+    public enum ApplyTarget: Sendable {
         case desktop
         case lockScreen
         case both
@@ -32,9 +32,13 @@ public final class WallpaperDownloader: NSObject, ObservableObject, URLSessionDo
             .replacingOccurrences(of: "/", with: "-")
             .replacingOccurrences(of: ":", with: "-")
             .replacingOccurrences(of: "\"", with: "")
+            .replacingOccurrences(of: "\\", with: "-")
+            .replacingOccurrences(of: "|", with: "-")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
         var ext = item.downloadURL.pathExtension.lowercased()
-        if ext.isEmpty || ext.count > 5 {
-            ext = "gif"
+        if ext.isEmpty || ext == "php" || ext.count > 5 {
+            ext = "mp4"
         }
         return BackdropLibraryService.shared.localWallpapersDirectory
             .appendingPathComponent("\(safeTitle).\(ext)")
@@ -77,11 +81,69 @@ public final class WallpaperDownloader: NSObject, ObservableObject, URLSessionDo
             return
         }
 
-        // Remote network download
+        // Check if item needs resolving (e.g. MoeWalls page URL)
+        if item.downloadURL.absoluteString.contains("moewalls.com") && !item.downloadURL.absoluteString.contains("download.php") {
+            downloadStatus[item.id] = "Resolving MoeWalls high-res direct stream..."
+            downloadProgress[item.id] = 0.05
+
+            Task {
+                if let resolved = await MoeWallsBackendService.shared.resolveDownloadURL(from: item.downloadURL.absoluteString) {
+                    let resolvedItem = CatalogItem(
+                        id: item.id,
+                        title: item.title,
+                        category: item.category,
+                        thumbnailURL: item.thumbnailURL,
+                        previewURL: item.previewURL,
+                        downloadURL: resolved,
+                        resolution: item.resolution,
+                        fileSizeString: item.fileSizeString,
+                        sourceDescription: item.sourceDescription,
+                        isLocalCopy: item.isLocalCopy
+                    )
+                    DispatchQueue.main.async {
+                        self.startRemoteDownload(item: resolvedItem, target: target, completion: completion)
+                    }
+                } else if let preview = item.previewURL {
+                    let fallbackItem = CatalogItem(
+                        id: item.id,
+                        title: item.title,
+                        category: item.category,
+                        thumbnailURL: item.thumbnailURL,
+                        previewURL: preview,
+                        downloadURL: preview,
+                        resolution: item.resolution,
+                        fileSizeString: item.fileSizeString,
+                        sourceDescription: item.sourceDescription,
+                        isLocalCopy: item.isLocalCopy
+                    )
+                    DispatchQueue.main.async {
+                        self.startRemoteDownload(item: fallbackItem, target: target, completion: completion)
+                    }
+                } else {
+                    DispatchQueue.main.async {
+                        self.downloadStatus[item.id] = "Could not resolve stream link."
+                        completion(false)
+                    }
+                }
+            }
+            return
+        }
+
+        startRemoteDownload(item: item, target: target, completion: completion)
+    }
+
+    private func startRemoteDownload(
+        item: CatalogItem,
+        target: ApplyTarget,
+        completion: @escaping (Bool) -> Void
+    ) {
         downloadStatus[item.id] = "Starting download..."
         downloadProgress[item.id] = 0.01
 
-        let task = session.downloadTask(with: item.downloadURL)
+        var request = URLRequest(url: item.downloadURL)
+        request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko)", forHTTPHeaderField: "User-Agent")
+
+        let task = session.downloadTask(with: request)
         activeTasks[task.taskIdentifier] = (item, target, completion)
         task.resume()
     }
@@ -104,7 +166,11 @@ public final class WallpaperDownloader: NSObject, ObservableObject, URLSessionDo
             self.downloadProgress[taskInfo.item.id] = progress
             let mb = Double(totalBytesWritten) / (1024 * 1024)
             let totalMb = Double(totalBytesExpectedToWrite) / (1024 * 1024)
-            self.downloadStatus[taskInfo.item.id] = String(format: "%.1f MB / %.1f MB (%.0f%%)", mb, totalMb, progress * 100)
+            if totalBytesExpectedToWrite > 0 {
+                self.downloadStatus[taskInfo.item.id] = String(format: "%.1f MB / %.1f MB (%.0f%%)", mb, totalMb, progress * 100)
+            } else {
+                self.downloadStatus[taskInfo.item.id] = String(format: "%.1f MB downloaded", mb)
+            }
         }
     }
 
@@ -114,7 +180,15 @@ public final class WallpaperDownloader: NSObject, ObservableObject, URLSessionDo
         didFinishDownloadingTo location: URL
     ) {
         guard let taskInfo = activeTasks[downloadTask.taskIdentifier] else { return }
-        let dest = destinationURL(for: taskInfo.item)
+        var dest = destinationURL(for: taskInfo.item)
+
+        // If suggested filename has mp4/mov and current dest does not
+        if let suggested = downloadTask.response?.suggestedFilename,
+           (suggested.hasSuffix(".mp4") || suggested.hasSuffix(".mov") || suggested.hasSuffix(".webm")),
+           dest.pathExtension.isEmpty || dest.pathExtension == "php" {
+            let ext = (suggested as NSString).pathExtension
+            dest = dest.deletingPathExtension().appendingPathExtension(ext)
+        }
 
         do {
             if FileManager.default.fileExists(atPath: dest.path) {

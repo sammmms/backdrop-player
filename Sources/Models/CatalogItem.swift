@@ -1,6 +1,6 @@
 import Foundation
 
-public struct CatalogItem: Identifiable, Equatable, Hashable {
+public struct CatalogItem: Identifiable, Equatable, Hashable, Sendable {
     public let id: String
     public let title: String
     public let category: String

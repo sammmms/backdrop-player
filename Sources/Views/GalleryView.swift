@@ -4,7 +4,8 @@ import AppKit
 public struct GalleryView: View {
     @ObservedObject private var downloader = WallpaperDownloader.shared
     @State private var items: [CatalogItem] = []
-    @State private var selectedCategory: String = "🔥 Trending Workshop"
+    @State private var selectedMarketplace: String = "🌐 All Marketplaces"
+    @State private var selectedCategory: String = "All Categories"
     @State private var searchText: String = ""
     @State private var customURLText: String = ""
     @State private var customTitleText: String = ""
@@ -13,25 +14,18 @@ public struct GalleryView: View {
     @State private var isSearchingBackend: Bool = false
     @State private var searchTask: Task<Void, Never>?
 
-    private let categories = [
-        "🔥 Trending Workshop",
-        "Anime & Gaming",
-        "Sci-Fi & Cyberpunk",
-        "4K Nature & Space",
-        "Backdrop Collection",
-        "Downloaded / Ready",
-        "Custom URL"
-    ]
+    private let marketplaces = CatalogService.availableMarketplaces
+    private let categories = CatalogService.availableCategories
 
     public init() {}
 
     public var body: some View {
         VStack(spacing: 0) {
             headerView
-            categoryBar
+            filterBar
             Divider()
 
-            if selectedCategory == "Custom URL" {
+            if selectedMarketplace == "🔗 Custom Video URL" {
                 directURLView
             } else {
                 galleryGrid
@@ -41,10 +35,10 @@ public struct GalleryView: View {
                 toastBanner(toast)
             }
         }
-        .frame(minWidth: 960, minHeight: 660)
+        .frame(minWidth: 980, minHeight: 680)
         .background(Color(NSColor.windowBackgroundColor))
         .onAppear {
-            performLiveSearch(query: searchText, category: selectedCategory)
+            performLiveSearch(query: searchText, marketplace: selectedMarketplace, category: selectedCategory)
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("WallpaperEngineStateChanged"))) { _ in
             refreshTrigger = UUID()
@@ -74,7 +68,7 @@ public struct GalleryView: View {
                 .foregroundColor(.accentColor)
 
             VStack(alignment: .leading, spacing: 3) {
-                Text("Steam Workshop & Wallpaper Engine Hub")
+                Text("Live Wallpaper Hub & Marketplaces")
                     .font(.title3)
                     .fontWeight(.bold)
 
@@ -107,7 +101,7 @@ public struct GalleryView: View {
 
             Spacer()
 
-            // Live Backend Search Field
+            // Live Search Field
             HStack(spacing: 6) {
                 if isSearchingBackend {
                     ProgressView()
@@ -118,18 +112,18 @@ public struct GalleryView: View {
                         .foregroundColor(.secondary)
                 }
 
-                TextField("Search Steam Workshop live (e.g. toad, cyberpunk)...", text: $searchText, onCommit: {
-                    performLiveSearch(query: searchText, category: selectedCategory)
+                TextField("Search live (e.g. toad, cyberpunk, anime)...", text: $searchText, onCommit: {
+                    performLiveSearch(query: searchText, marketplace: selectedMarketplace, category: selectedCategory)
                 })
                 .textFieldStyle(PlainTextFieldStyle())
                 .onChange(of: searchText) { newValue in
-                    performLiveSearch(query: newValue, category: selectedCategory)
+                    performLiveSearch(query: newValue, marketplace: selectedMarketplace, category: selectedCategory)
                 }
 
                 if !searchText.isEmpty {
                     Button(action: {
                         searchText = ""
-                        performLiveSearch(query: "", category: selectedCategory)
+                        performLiveSearch(query: "", marketplace: selectedMarketplace, category: selectedCategory)
                     }) {
                         Image(systemName: "xmark.circle.fill")
                             .foregroundColor(.secondary)
@@ -144,50 +138,138 @@ public struct GalleryView: View {
             .frame(width: 290)
 
             Button(action: {
-                performLiveSearch(query: searchText, category: selectedCategory)
-                showToast("Reloading Steam Workshop backend...")
+                performLiveSearch(query: searchText, marketplace: selectedMarketplace, category: selectedCategory)
+                showToast("Refreshing live connectors...")
             }) {
                 Image(systemName: "arrow.clockwise")
                     .font(.system(size: 13, weight: .medium))
             }
             .buttonStyle(PlainButtonStyle())
-            .help("Refresh Backend Results")
+            .help("Refresh Live Marketplaces")
         }
         .padding(16)
     }
 
-    // MARK: - Category Bar
+    // MARK: - Filter Bar (Dropdowns instead of horizontal category tabs)
 
-    private var categoryBar: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(categories, id: \.self) { cat in
+    private var filterBar: some View {
+        HStack(spacing: 12) {
+            // 1. Marketplace Filter Dropdown
+            Menu {
+                ForEach(marketplaces, id: \.self) { m in
                     Button(action: {
-                        selectedCategory = cat
-                        performLiveSearch(query: searchText, category: cat)
+                        selectedMarketplace = m
+                        performLiveSearch(query: searchText, marketplace: m, category: selectedCategory)
                     }) {
-                        Text(cat)
-                            .font(.system(size: 12, weight: selectedCategory == cat ? .semibold : .regular))
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .background(
-                                selectedCategory == cat
-                                    ? Color.accentColor
-                                    : Color(NSColor.controlBackgroundColor)
-                            )
-                            .foregroundColor(
-                                selectedCategory == cat
-                                    ? .white
-                                    : .primary
-                            )
-                            .cornerRadius(14)
+                        HStack {
+                            Text(m)
+                            if selectedMarketplace == m {
+                                Image(systemName: "checkmark")
+                            }
+                        }
                     }
-                    .buttonStyle(PlainButtonStyle())
                 }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "globe.americas.fill")
+                        .foregroundColor(.accentColor)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Marketplace")
+                            .font(.system(size: 9))
+                            .foregroundColor(.secondary)
+                        Text(selectedMarketplace)
+                            .font(.system(size: 12, weight: .semibold))
+                    }
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(.secondary)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(Color(NSColor.controlBackgroundColor))
+                .cornerRadius(7)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
+            .menuStyle(BorderlessButtonMenuStyle())
+
+            // 2. Category Filter Dropdown
+            Menu {
+                ForEach(categories, id: \.self) { c in
+                    Button(action: {
+                        selectedCategory = c
+                        performLiveSearch(query: searchText, marketplace: selectedMarketplace, category: c)
+                    }) {
+                        HStack {
+                            Text(c)
+                            if selectedCategory == c {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "tag.fill")
+                        .foregroundColor(.purple)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Category")
+                            .font(.system(size: 9))
+                            .foregroundColor(.secondary)
+                        Text(selectedCategory)
+                            .font(.system(size: 12, weight: .semibold))
+                    }
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(.secondary)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(Color(NSColor.controlBackgroundColor))
+                .cornerRadius(7)
+            }
+            .menuStyle(BorderlessButtonMenuStyle())
+
+            // Reset filters button if customized
+            if selectedMarketplace != "🌐 All Marketplaces" || selectedCategory != "All Categories" || !searchText.isEmpty {
+                Button(action: {
+                    selectedMarketplace = "🌐 All Marketplaces"
+                    selectedCategory = "All Categories"
+                    searchText = ""
+                    performLiveSearch(query: "", marketplace: "🌐 All Marketplaces", category: "All Categories")
+                }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.counterclockwise")
+                        Text("Reset Filters")
+                    }
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.secondary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(Color(NSColor.controlBackgroundColor))
+                    .cornerRadius(6)
+                }
+                .buttonStyle(PlainButtonStyle())
+            }
+
+            Spacer()
+
+            // Result count indicator
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(isSearchingBackend ? Color.orange : Color.green)
+                    .frame(width: 7, height: 7)
+
+                Text(isSearchingBackend ? "Fetching live..." : "\(items.count) wallpapers ready")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.secondary)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(Color(NSColor.controlBackgroundColor).opacity(0.6))
+            .cornerRadius(12)
         }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(Color(NSColor.windowBackgroundColor))
     }
 
     // MARK: - Grid View
@@ -196,22 +278,22 @@ public struct GalleryView: View {
         ScrollView {
             if isSearchingBackend && items.isEmpty {
                 VStack(spacing: 12) {
-                    Spacer().frame(height: 60)
-                    ProgressView("Searching Steam Workshop backend...")
-                    Text("Fetching live items from Steam Community API...")
+                    Spacer().frame(height: 70)
+                    ProgressView("Connecting to live marketplace...")
+                    Text("Fetching feeds from \(selectedMarketplace)...")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                 }
                 .frame(maxWidth: .infinity)
             } else if items.isEmpty {
                 VStack(spacing: 10) {
-                    Spacer().frame(height: 60)
+                    Spacer().frame(height: 70)
                     Image(systemName: "magnifyingglass")
                         .font(.system(size: 32))
                         .foregroundColor(.secondary)
-                    Text("No wallpapers found for \"\(searchText)\"")
+                    Text("No wallpapers found")
                         .font(.headline)
-                    Text("Try searching another keyword (e.g. anime, toad, car, cyberpunk, genshin, nature)")
+                    Text("Try changing your keyword, marketplace, or category filter.")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                 }
@@ -276,7 +358,7 @@ public struct GalleryView: View {
                 .padding(6)
                 .frame(maxWidth: .infinity, alignment: .topLeading)
 
-                // Resolution & Size Badges
+                // Resolution & Source Badges
                 HStack(spacing: 4) {
                     if isDownloaded {
                         Text("SAVED")
@@ -313,10 +395,20 @@ public struct GalleryView: View {
                     .font(.system(size: 13, weight: .bold))
                     .lineLimit(1)
 
-                Text("\(item.category) • \(item.sourceDescription)")
-                    .font(.system(size: 11))
-                    .foregroundColor(.secondary)
-                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(item.sourceDescription)
+                        .font(.system(size: 10, weight: .semibold))
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1.5)
+                        .background(sourceBadgeColor(for: item.sourceDescription).opacity(0.15))
+                        .foregroundColor(sourceBadgeColor(for: item.sourceDescription))
+                        .cornerRadius(3)
+
+                    Text(item.category)
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                }
             }
 
             // Download Progress or Action Buttons
@@ -358,13 +450,13 @@ public struct GalleryView: View {
                     Button(action: {
                         downloader.downloadAndApply(item: item, target: .lockScreen) { success in
                             if success {
-                                showToast("🔒 Set \"\(item.title)\" as Lock Screen!")
+                                showToast("🔒 Set \"\(item.title)\" as Lock Screen wallpaper!")
                             }
                         }
                     }) {
                         HStack(spacing: 4) {
-                            Image(systemName: isLockScreen ? "checkmark.shield.fill" : "lock.fill")
-                            Text(isLockScreen ? "Lock Active" : "Set Lock")
+                            Image(systemName: isLockScreen ? "checkmark.circle.fill" : "lock.fill")
+                            Text(isLockScreen ? "Locked" : "Set Lock")
                         }
                         .font(.system(size: 11, weight: .semibold))
                         .frame(maxWidth: .infinity)
@@ -375,50 +467,72 @@ public struct GalleryView: View {
                     }
                     .buttonStyle(PlainButtonStyle())
 
-                    // Button 3: Set Both Menu
+                    // Button 3: More actions (Set Both, Open Page)
                     Menu {
-                        Button("Set as Desktop & Lock Screen") {
+                        Button(action: {
                             downloader.downloadAndApply(item: item, target: .both) { success in
                                 if success {
-                                    showToast("Applied \"\(item.title)\" to Desktop & Lock Screen!")
+                                    showToast("✨ Set \"\(item.title)\" for Both Desktop & Lock Screen!")
                                 }
+                            }
+                        }) {
+                            Label("Set Both Desktop & Lock Screen", systemImage: "sparkles")
+                        }
+
+                        if !item.isLocalCopy {
+                            Button(action: {
+                                NSWorkspace.shared.open(item.downloadURL)
+                            }) {
+                                Label("Open Source Webpage", systemImage: "arrow.up.right.square")
+                            }
+                        }
+
+                        if isDownloaded {
+                            Button(action: {
+                                let fileURL = downloader.destinationURL(for: item)
+                                NSWorkspace.shared.selectFile(fileURL.path, inFileViewerRootedAtPath: fileURL.deletingLastPathComponent().path)
+                            }) {
+                                Label("Reveal in Finder", systemImage: "folder")
                             }
                         }
                     } label: {
                         Image(systemName: "ellipsis")
-                            .font(.system(size: 12))
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 6)
+                            .font(.system(size: 12, weight: .semibold))
+                            .frame(width: 26, height: 26)
                             .background(Color(NSColor.controlBackgroundColor))
                             .cornerRadius(6)
                     }
                     .menuStyle(BorderlessButtonMenuStyle())
-                    .frame(width: 24)
                 }
             }
         }
-        .padding(10)
-        .background(Color(NSColor.controlBackgroundColor))
-        .cornerRadius(10)
+        .padding(12)
+        .background(Color(NSColor.controlBackgroundColor).opacity(0.7))
+        .cornerRadius(12)
         .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(
-                    isDesktop ? Color.blue.opacity(0.6) :
-                    isLockScreen ? Color.purple.opacity(0.6) : Color.clear,
-                    lineWidth: 1.5
-                )
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(isDesktop || isLockScreen ? Color.accentColor.opacity(0.5) : Color.gray.opacity(0.15), lineWidth: 1)
         )
     }
 
-    // MARK: - Direct URL Downloader
+    private func sourceBadgeColor(for source: String) -> Color {
+        if source.contains("Steam") { return .blue }
+        if source.contains("MoeWalls") { return .pink }
+        if source.contains("DesktopHut") { return .orange }
+        if source.contains("Apple") { return .green }
+        if source.contains("Wallpaper Engine") { return .indigo }
+        return .secondary
+    }
+
+    // MARK: - Direct Video URL Downloader
 
     private var directURLView: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 20) {
             Text("Download from Custom Video URL")
                 .font(.title3)
                 .fontWeight(.bold)
 
-            Text("Paste any direct video link (.mp4, .mov, .m4v, .webm) to download and apply.")
+            Text("Paste any direct video link (.mp4, .mov, .m4v, .webm) from any website to download and set as wallpaper.")
                 .font(.subheadline)
                 .foregroundColor(.secondary)
 
@@ -466,6 +580,21 @@ public struct GalleryView: View {
                 }
                 .buttonStyle(PlainButtonStyle())
                 .disabled(customURLText.isEmpty)
+
+                Button(action: { downloadCustomURL(target: .both) }) {
+                    HStack {
+                        Image(systemName: "sparkles")
+                        Text("Download for Both")
+                    }
+                    .font(.system(size: 12, weight: .semibold))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(customURLText.isEmpty ? Color.gray : Color.indigo)
+                    .foregroundColor(.white)
+                    .cornerRadius(8)
+                }
+                .buttonStyle(PlainButtonStyle())
+                .disabled(customURLText.isEmpty)
             }
 
             Spacer()
@@ -502,18 +631,18 @@ public struct GalleryView: View {
 
     // MARK: - Helpers
 
-    private func performLiveSearch(query: String, category: String) {
+    private func performLiveSearch(query: String, marketplace: String, category: String) {
         searchTask?.cancel()
         isSearchingBackend = true
 
         searchTask = Task {
-            // Small debounce if typing
+            // Debounce when actively typing text
             if !query.isEmpty {
                 try? await Task.sleep(nanoseconds: 300_000_000)
             }
             guard !Task.isCancelled else { return }
 
-            let results = await CatalogService.shared.searchLive(query: query, category: category)
+            let results = await CatalogService.shared.searchLive(query: query, marketplace: marketplace, category: category)
             guard !Task.isCancelled else { return }
 
             await MainActor.run {
