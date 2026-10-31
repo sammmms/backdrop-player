@@ -71,6 +71,69 @@ public final class WallpaperEngine: NSObject {
         }
     }
 
+    // MARK: - Playback Speed & Volume Configuration
+
+    public var currentPlaybackRate: Double {
+        return getPlaybackRate(for: currentDesktopWallpaper?.id)
+    }
+
+    public func getPlaybackRate(for wallpaperId: String? = nil) -> Double {
+        let id = wallpaperId ?? currentDesktopWallpaper?.id ?? "global"
+        let val = UserDefaults.standard.double(forKey: "WallpaperEngine.rate.\(id)")
+        return val >= 0.1 ? val : 1.0
+    }
+
+    public func setPlaybackRate(_ rate: Double, for wallpaperId: String? = nil) {
+        let id = wallpaperId ?? currentDesktopWallpaper?.id ?? "global"
+        let safeRate = max(0.1, min(rate, 3.0))
+        UserDefaults.standard.set(safeRate, forKey: "WallpaperEngine.rate.\(id)")
+
+        // Apply immediately to active sessions if setting for active desktop wallpaper
+        if wallpaperId == nil || wallpaperId == currentDesktopWallpaper?.id {
+            for session in sessions {
+                if isPlaying && !isSystemSleeping {
+                    session.player?.rate = Float(safeRate)
+                }
+            }
+        }
+        notifyStateChange()
+    }
+
+    public func getVolume(for wallpaperId: String? = nil) -> Float {
+        let id = wallpaperId ?? currentDesktopWallpaper?.id ?? "global"
+        if let val = UserDefaults.standard.object(forKey: "WallpaperEngine.volume.\(id)") as? Float {
+            return val
+        }
+        return 1.0
+    }
+
+    public func setVolume(_ volume: Float, for wallpaperId: String? = nil) {
+        let id = wallpaperId ?? currentDesktopWallpaper?.id ?? "global"
+        let safeVol = max(0.0, min(volume, 1.0))
+        UserDefaults.standard.set(safeVol, forKey: "WallpaperEngine.volume.\(id)")
+
+        if wallpaperId == nil || wallpaperId == currentDesktopWallpaper?.id {
+            for session in sessions {
+                session.player?.volume = safeVol
+            }
+        }
+        notifyStateChange()
+    }
+
+    // MARK: - Still Frame Thumbnail for Mini Previews
+
+    public func stillFrameImage(for item: WallpaperItem?) -> NSImage? {
+        guard let item = item else { return nil }
+        if let stillURL = ensureStillFrame(for: item),
+           let img = NSImage(contentsOf: stillURL) {
+            return img
+        }
+        if let img = NSImage(contentsOf: item.fileURL) {
+            return img
+        }
+        return nil
+    }
+
     public var onStateChange: (() -> Void)?
 
     public func notifyStateChange() {
@@ -478,8 +541,10 @@ public final class WallpaperEngine: NSObject {
     }
 
     private func resumeInternal() {
+        let rate = Float(currentPlaybackRate)
         for session in sessions {
             session.player?.play()
+            session.player?.rate = rate
         }
     }
 
@@ -514,9 +579,14 @@ public final class WallpaperEngine: NSObject {
             session.looper = looper
             session.playerView = playerView
 
+            let rate = Float(getPlaybackRate(for: item.id))
+            let volume = getVolume(for: item.id)
+            queuePlayer.volume = volume
+
             if isPlaying && !isSystemSleeping {
                 queuePlayer.play()
-                print("[WallpaperEngine] Started queuePlayer playback on \(screen.localizedName), isMuted=\(isMuted)")
+                queuePlayer.rate = rate
+                print("[WallpaperEngine] Started queuePlayer playback on \(screen.localizedName), isMuted=\(isMuted), rate=\(rate)")
             }
         } else {
             let imageView = NSImageView(frame: NSRect(origin: .zero, size: screen.frame.size))
@@ -564,9 +634,14 @@ public final class WallpaperEngine: NSObject {
             session.looper = looper
             session.playerView = playerView
 
+            let rate = Float(getPlaybackRate(for: item.id))
+            let volume = getVolume(for: item.id)
+            queuePlayer.volume = volume
+
             if isPlaying && !isSystemSleeping {
                 queuePlayer.play()
-                print("[WallpaperEngine] Swapped video playback on \(session.screen.localizedName) to: \(item.title)")
+                queuePlayer.rate = rate
+                print("[WallpaperEngine] Swapped video playback on \(session.screen.localizedName) to: \(item.title), rate=\(rate)")
             }
         } else {
             let imageView = NSImageView(frame: NSRect(origin: .zero, size: session.screen.frame.size))

@@ -5,11 +5,10 @@ public final class CatalogService {
     public static let shared = CatalogService()
 
     public static let availableMarketplaces: [String] = [
-        "🌐 All Marketplaces",
         "🔥 Steam Workshop",
+        "🪐 Wallpaper Engine Space",
         "🌸 MoeWalls (Anime & Aesthetic)",
         "⚡ DesktopHut (4K PC)",
-        "🪐 Wallpaper Engine Space",
         "🍏 Apple Aerials 4K",
         "🎬 Backdrop Collection",
         "💾 Downloaded / Ready",
@@ -17,7 +16,6 @@ public final class CatalogService {
     ]
 
     public static let availableCategories: [String] = [
-        "All Categories",
         "Anime & Manga",
         "Gaming",
         "Sci-Fi & Cyberpunk",
@@ -39,11 +37,190 @@ public final class CatalogService {
         return items
     }
 
-    // MARK: - Multi-Marketplace Live Search & Filter
+    // MARK: - Multi-Marketplace & Multi-Category Live Search
 
+    public func searchLiveMulti(
+        query: String,
+        marketplaces: Set<String>,
+        categories: Set<String>,
+        page: Int = 1
+    ) async -> [CatalogItem] {
+        let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let activeMarketplaces = marketplaces.isEmpty
+            ? Set(Self.availableMarketplaces.filter { $0 != "🔗 Custom Video URL" })
+            : marketplaces
+
+        var tasks: [Task<[CatalogItem], Never>] = []
+
+        // 1. Steam Workshop
+        if activeMarketplaces.contains("🔥 Steam Workshop") {
+            let task = Task { () -> [CatalogItem] in
+                if !trimmedQuery.isEmpty {
+                    return await SteamWorkshopBackendService.shared.search(query: trimmedQuery, sort: "trend", page: page)
+                } else if categories.isEmpty {
+                    return await SteamWorkshopBackendService.shared.search(query: "", sort: "trend", page: page)
+                } else {
+                    var categoryItems: [CatalogItem] = []
+                    for cat in categories.prefix(3) {
+                        let kw = self.categorySteamKeyword(for: cat)
+                        let res = await SteamWorkshopBackendService.shared.search(query: kw, sort: "trend", page: page)
+                        categoryItems.append(contentsOf: res)
+                    }
+                    return categoryItems
+                }
+            }
+            tasks.append(task)
+        }
+
+        // 2. Wallpaper Engine Space
+        if activeMarketplaces.contains("🪐 Wallpaper Engine Space") && page == 1 {
+            let task = Task { () -> [CatalogItem] in
+                var list = self.steamWallpaperEngineItems
+                if !trimmedQuery.isEmpty {
+                    list = list.filter {
+                        $0.title.localizedCaseInsensitiveContains(trimmedQuery) ||
+                        $0.category.localizedCaseInsensitiveContains(trimmedQuery)
+                    }
+                }
+                return list
+            }
+            tasks.append(task)
+        }
+
+        // 3. MoeWalls
+        if activeMarketplaces.contains("🌸 MoeWalls (Anime & Aesthetic)") {
+            let task = Task { () -> [CatalogItem] in
+                if !trimmedQuery.isEmpty {
+                    return await MoeWallsBackendService.shared.search(query: trimmedQuery, category: "All Categories", page: page)
+                } else if categories.isEmpty {
+                    return await MoeWallsBackendService.shared.search(query: "", category: "All Categories", page: page)
+                } else {
+                    var moeItems: [CatalogItem] = []
+                    for cat in categories.prefix(2) {
+                        let res = await MoeWallsBackendService.shared.search(query: "", category: cat, page: page)
+                        moeItems.append(contentsOf: res)
+                    }
+                    return moeItems
+                }
+            }
+            tasks.append(task)
+        }
+
+        // 4. DesktopHut
+        if activeMarketplaces.contains("⚡ DesktopHut (4K PC)") {
+            let task = Task { () -> [CatalogItem] in
+                if !trimmedQuery.isEmpty {
+                    return await DesktopHutBackendService.shared.search(query: trimmedQuery, category: "All Categories", page: page)
+                } else if categories.isEmpty {
+                    return await DesktopHutBackendService.shared.search(query: "", category: "All Categories", page: page)
+                } else {
+                    var dhItems: [CatalogItem] = []
+                    for cat in categories.prefix(2) {
+                        let res = await DesktopHutBackendService.shared.search(query: "", category: cat, page: page)
+                        dhItems.append(contentsOf: res)
+                    }
+                    return dhItems
+                }
+            }
+            tasks.append(task)
+        }
+
+        // 5. Apple Aerials 4K
+        if activeMarketplaces.contains("🍏 Apple Aerials 4K") && page == 1 {
+            let task = Task { () -> [CatalogItem] in
+                var list = self.appleAerialItems
+                if !trimmedQuery.isEmpty {
+                    list = list.filter {
+                        $0.title.localizedCaseInsensitiveContains(trimmedQuery) ||
+                        $0.sourceDescription.localizedCaseInsensitiveContains(trimmedQuery)
+                    }
+                }
+                return list
+            }
+            tasks.append(task)
+        }
+
+        // 6. Backdrop Collection
+        if activeMarketplaces.contains("🎬 Backdrop Collection") && page == 1 {
+            let task = Task { () -> [CatalogItem] in
+                var list = self.localFeaturedItems + self.fetchBackdropCachedItems()
+                if !trimmedQuery.isEmpty {
+                    list = list.filter { $0.title.localizedCaseInsensitiveContains(trimmedQuery) }
+                }
+                return list
+            }
+            tasks.append(task)
+        }
+
+        // 7. Downloaded / Ready
+        if activeMarketplaces.contains("💾 Downloaded / Ready") && page == 1 {
+            let task = Task { () -> [CatalogItem] in
+                let dir = BackdropLibraryService.shared.localWallpapersDirectory
+                let localFiles = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+                var list = self.fetchCatalog().filter { item in
+                    localFiles.contains(where: { $0.lowercased().contains(item.title.lowercased()) }) || item.isLocalCopy
+                }
+                if !trimmedQuery.isEmpty {
+                    list = list.filter { $0.title.localizedCaseInsensitiveContains(trimmedQuery) }
+                }
+                return list
+            }
+            tasks.append(task)
+        }
+
+        var resultsBySource: [[CatalogItem]] = []
+        for t in tasks {
+            let items = await t.value
+            if !items.isEmpty {
+                resultsBySource.append(items)
+            }
+        }
+
+        var merged: [CatalogItem] = []
+        var seen = Set<String>()
+        let maxLen = resultsBySource.map { $0.count }.max() ?? 0
+
+        for i in 0..<maxLen {
+            for sourceList in resultsBySource {
+                if i < sourceList.count {
+                    let it = sourceList[i]
+                    let key = it.title.lowercased().trimmingCharacters(in: .whitespaces)
+                    if !seen.contains(key) {
+                        seen.insert(key)
+                        merged.append(it)
+                    }
+                }
+            }
+        }
+
+        // Multi-category filtering
+        if !categories.isEmpty {
+            merged = merged.filter { item in
+                self.matchesAnyCategory(item: item, categories: categories)
+            }
+        }
+
+        return merged
+    }
+
+    public func matchesAnyCategory(item: CatalogItem, categories: Set<String>) -> Bool {
+        if categories.isEmpty { return true }
+        for cat in categories {
+            let kw = categorySteamKeyword(for: cat).lowercased()
+            if item.category.localizedCaseInsensitiveContains(cat) ||
+               (!kw.isEmpty && item.category.localizedCaseInsensitiveContains(kw)) ||
+               (!kw.isEmpty && item.title.localizedCaseInsensitiveContains(kw)) {
+                return true
+            }
+        }
+        return false
+    }
+
+    // Single-selection backward-compatible methods
     public func searchLive(
         query: String,
-        marketplace: String = "🌐 All Marketplaces",
+        marketplace: String = "🔥 Steam Workshop",
         category: String = "All Categories",
         page: Int = 1
     ) async -> [CatalogItem] {

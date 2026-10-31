@@ -271,6 +271,34 @@ public final class StatusBarController: NSObject, NSMenuDelegate {
         muteItem.state = engine.isMuted ? .on : .off
         menu.addItem(muteItem)
 
+        // Submenu: Playback Speed (Time Scale)
+        let speedSubmenu = NSMenu()
+        let speedOptions: [(title: String, rate: Double)] = [
+            ("0.5x (Slow Motion)", 0.5),
+            ("0.75x (Relaxed)", 0.75),
+            ("1.0x (Normal)", 1.0),
+            ("1.25x (Brisk)", 1.25),
+            ("1.5x (Fast)", 1.5),
+            ("2.0x (Double Speed)", 2.0)
+        ]
+        let currentRate = engine.currentPlaybackRate
+        for opt in speedOptions {
+            let item = NSMenuItem(
+                title: opt.title,
+                action: #selector(handleSelectPlaybackRate(_:)),
+                keyEquivalent: ""
+            )
+            item.target = self
+            item.representedObject = opt.rate
+            if abs(currentRate - opt.rate) < 0.05 {
+                item.state = .on
+            }
+            speedSubmenu.addItem(item)
+        }
+        let speedMenuItem = NSMenuItem(title: "Playback Speed (Time Scale)", action: nil, keyEquivalent: "")
+        speedMenuItem.submenu = speedSubmenu
+        menu.addItem(speedMenuItem)
+
         // Submenu: Scaling Mode
         let scalingSubmenu = NSMenu()
         for mode in WallpaperScalingMode.allCases {
@@ -389,6 +417,11 @@ public final class StatusBarController: NSObject, NSMenuDelegate {
 
     @objc private func handleToggleMute() {
         engine.isMuted.toggle()
+    }
+
+    @objc private func handleSelectPlaybackRate(_ sender: NSMenuItem) {
+        guard let rate = sender.representedObject as? Double else { return }
+        engine.setPlaybackRate(rate)
     }
 
     @objc private func handleSelectScalingMode(_ sender: NSMenuItem) {

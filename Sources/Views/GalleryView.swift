@@ -4,8 +4,11 @@ import AppKit
 public struct GalleryView: View {
     @ObservedObject private var downloader = WallpaperDownloader.shared
     @State private var items: [CatalogItem] = []
-    @State private var selectedMarketplace: String = "🌐 All Marketplaces"
-    @State private var selectedCategory: String = "All Categories"
+
+    // Multi-select checklists
+    @State private var selectedMarketplaces: Set<String> = Set(CatalogService.availableMarketplaces.filter { $0 != "🔗 Custom Video URL" })
+    @State private var selectedCategories: Set<String> = Set(CatalogService.availableCategories)
+
     @State private var searchText: String = ""
     @State private var customURLText: String = ""
     @State private var customTitleText: String = ""
@@ -17,95 +20,472 @@ public struct GalleryView: View {
     @State private var isLoadingMore: Bool = false
     @State private var canLoadMore: Bool = true
 
-    private let marketplaces = CatalogService.availableMarketplaces
+    // Sheet for per-wallpaper config
+    @State private var configuringItem: CatalogItem?
+    @State private var showCustomURLView: Bool = false
+
+    // Live desktop playback rate for sidebar control
+    @State private var activeDesktopRate: Double = 1.0
+
+    private let marketplaces = CatalogService.availableMarketplaces.filter { $0 != "🔗 Custom Video URL" }
     private let categories = CatalogService.availableCategories
+    private let ratePresets: [Double] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
 
     public init() {}
 
     public var body: some View {
-        VStack(spacing: 0) {
-            headerView
-            filterBar
+        HStack(spacing: 0) {
+            // MARK: - Left Persistent Sidebar
+            sidebarView
+                .frame(width: 270)
+                .background(Color(NSColor.controlBackgroundColor).opacity(0.85))
+
             Divider()
 
-            if selectedMarketplace == "🔗 Custom Video URL" {
-                directURLView
-            } else {
-                galleryGrid
-            }
+            // MARK: - Right Main Content Area
+            VStack(spacing: 0) {
+                mainTopBar
+                Divider()
 
-            if let toast = toastMessage {
-                toastBanner(toast)
+                if showCustomURLView {
+                    directURLView
+                } else {
+                    galleryGrid
+                }
+
+                if let toast = toastMessage {
+                    toastBanner(toast)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color(NSColor.windowBackgroundColor))
+        }
+        .frame(minWidth: 1040, minHeight: 700)
+        .sheet(item: $configuringItem) { item in
+            WallpaperConfigSheet(item: item) {
+                configuringItem = nil
+                refreshTrigger = UUID()
             }
         }
-        .frame(minWidth: 980, minHeight: 680)
-        .background(Color(NSColor.windowBackgroundColor))
         .onAppear {
-            performLiveSearch(query: searchText, marketplace: selectedMarketplace, category: selectedCategory)
+            activeDesktopRate = WallpaperEngine.shared.currentPlaybackRate
+            performLiveMultiSearch(query: searchText, marketplaces: selectedMarketplaces, categories: selectedCategories)
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("WallpaperEngineStateChanged"))) { _ in
             refreshTrigger = UUID()
+            activeDesktopRate = WallpaperEngine.shared.currentPlaybackRate
         }
     }
 
-    // MARK: - Header
+    // MARK: - Left Sidebar
+
+    private var sidebarView: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                // 1. Sidebar Header
+                HStack(spacing: 8) {
+                    Image(systemName: "sparkles.tv")
+                        .font(.system(size: 20, weight: .bold))
+                        .foregroundColor(.accentColor)
+                    Text("Backdrop Hub")
+                        .font(.headline)
+                        .fontWeight(.bold)
+                    Spacer()
+                }
+                .padding(.top, 14)
+
+                Divider()
+
+                // 2. Active Screen Mini Previews
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("ACTIVE DISPLAYS")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundColor(.secondary)
+
+                    // Desktop Mini Preview
+                    miniDesktopPreviewCard
+
+                    // Lock Screen Mini Preview
+                    miniLockScreenPreviewCard
+                }
+
+                Divider()
+
+                // 3. Marketplace Checklist
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Label("Marketplaces", systemImage: "globe.americas.fill")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundColor(.secondary)
+                        Spacer()
+                        Button("All") {
+                            selectedMarketplaces = Set(marketplaces)
+                            performLiveMultiSearch(query: searchText, marketplaces: selectedMarketplaces, categories: selectedCategories)
+                        }
+                        .buttonStyle(BorderlessButtonStyle())
+                        .font(.system(size: 10))
+
+                        Text("|").font(.system(size: 10)).foregroundColor(.secondary)
+
+                        Button("Clear") {
+                            selectedMarketplaces.removeAll()
+                            performLiveMultiSearch(query: searchText, marketplaces: selectedMarketplaces, categories: selectedCategories)
+                        }
+                        .buttonStyle(BorderlessButtonStyle())
+                        .font(.system(size: 10))
+                    }
+
+                    ForEach(marketplaces, id: \.self) { m in
+                        HStack(spacing: 6) {
+                            Button(action: {
+                                toggleMarketplace(m)
+                            }) {
+                                Image(systemName: selectedMarketplaces.contains(m) ? "checkmark.square.fill" : "square")
+                                    .foregroundColor(selectedMarketplaces.contains(m) ? .accentColor : .secondary)
+                                    .font(.system(size: 13))
+                            }
+                            .buttonStyle(PlainButtonStyle())
+
+                            Text(m)
+                                .font(.system(size: 11, weight: selectedMarketplaces.contains(m) ? .semibold : .regular))
+                                .foregroundColor(selectedMarketplaces.contains(m) ? .primary : .secondary)
+                                .lineLimit(1)
+                                .onTapGesture {
+                                    toggleMarketplace(m)
+                                }
+
+                            Spacer()
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+
+                Divider()
+
+                // 4. Category Checklist
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Label("Categories", systemImage: "tag.fill")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundColor(.secondary)
+                        Spacer()
+                        Button("All") {
+                            selectedCategories = Set(categories)
+                            performLiveMultiSearch(query: searchText, marketplaces: selectedMarketplaces, categories: selectedCategories)
+                        }
+                        .buttonStyle(BorderlessButtonStyle())
+                        .font(.system(size: 10))
+
+                        Text("|").font(.system(size: 10)).foregroundColor(.secondary)
+
+                        Button("Clear") {
+                            selectedCategories.removeAll()
+                            performLiveMultiSearch(query: searchText, marketplaces: selectedMarketplaces, categories: selectedCategories)
+                        }
+                        .buttonStyle(BorderlessButtonStyle())
+                        .font(.system(size: 10))
+                    }
+
+                    ForEach(categories, id: \.self) { c in
+                        HStack(spacing: 6) {
+                            Button(action: {
+                                toggleCategory(c)
+                            }) {
+                                Image(systemName: selectedCategories.contains(c) ? "checkmark.square.fill" : "square")
+                                    .foregroundColor(selectedCategories.contains(c) ? .purple : .secondary)
+                                    .font(.system(size: 13))
+                            }
+                            .buttonStyle(PlainButtonStyle())
+
+                            Text(categoryEmoji(for: c) + " " + c)
+                                .font(.system(size: 11, weight: selectedCategories.contains(c) ? .semibold : .regular))
+                                .foregroundColor(selectedCategories.contains(c) ? .primary : .secondary)
+                                .lineLimit(1)
+                                .onTapGesture {
+                                    toggleCategory(c)
+                                }
+
+                            Spacer()
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+
+                Divider()
+
+                // 5. Actions / Custom URL
+                VStack(spacing: 8) {
+                    Button(action: {
+                        showCustomURLView.toggle()
+                    }) {
+                        HStack {
+                            Image(systemName: "link.badge.plus")
+                            Text(showCustomURLView ? "Back to Catalog Grid" : "Custom Video URL...")
+                            Spacer()
+                        }
+                        .font(.system(size: 11, weight: .medium))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(showCustomURLView ? Color.accentColor : Color(NSColor.separatorColor).opacity(0.15))
+                        .foregroundColor(showCustomURLView ? .white : .primary)
+                        .cornerRadius(6)
+                    }
+                    .buttonStyle(PlainButtonStyle())
+
+                    Button(action: {
+                        selectedMarketplaces = Set(marketplaces)
+                        selectedCategories = Set(categories)
+                        searchText = ""
+                        showCustomURLView = false
+                        performLiveMultiSearch(query: "", marketplaces: selectedMarketplaces, categories: selectedCategories)
+                    }) {
+                        HStack {
+                            Image(systemName: "arrow.counterclockwise")
+                            Text("Reset All Filters")
+                            Spacer()
+                        }
+                        .font(.system(size: 11, weight: .regular))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .foregroundColor(.secondary)
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                }
+                .padding(.bottom, 20)
+            }
+            .padding(.horizontal, 14)
+        }
+    }
+
+    // MARK: - Mini Rendered Previews
+
+    private var desktopItem: WallpaperItem? {
+        _ = refreshTrigger
+        return WallpaperEngine.shared.currentDesktopWallpaper
+    }
+
+    private var lockScreenItem: WallpaperItem? {
+        _ = refreshTrigger
+        return WallpaperEngine.shared.currentLockScreenWallpaper
+    }
 
     private var currentDesktopTitle: String {
-        _ = refreshTrigger
-        return WallpaperEngine.shared.currentDesktopWallpaper?.title ??
+        desktopItem?.title ??
             UserDefaults.standard.string(forKey: "WallpaperEngine.desktopWallpaperTitle") ??
-            "None"
+            "Kirby Floating on Pond"
     }
 
     private var currentLockScreenTitle: String {
-        _ = refreshTrigger
-        return WallpaperEngine.shared.currentLockScreenWallpaper?.title ??
+        lockScreenItem?.title ??
             UserDefaults.standard.string(forKey: "WallpaperEngine.lockScreenWallpaperTitle") ??
-            "Abi Toads"
+            "Abi Toads (Original)"
     }
 
-    private var headerView: some View {
-        HStack(spacing: 16) {
-            Image(systemName: "sparkles.tv")
-                .font(.system(size: 28, weight: .semibold))
-                .foregroundColor(.accentColor)
+    private var miniDesktopPreviewCard: some View {
+        let stillImg = WallpaperEngine.shared.stillFrameImage(for: desktopItem)
+        let isPlaying = WallpaperEngine.shared.isPlaying
 
-            VStack(alignment: .leading, spacing: 3) {
-                Text("Live Wallpaper Hub & Marketplaces")
-                    .font(.title3)
-                    .fontWeight(.bold)
+        return VStack(spacing: 6) {
+            // Rendered Screen Box
+            ZStack(alignment: .topLeading) {
+                if let img = stillImg {
+                    Image(nsImage: img)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: 242, height: 110)
+                        .clipped()
+                } else {
+                    LinearGradient(
+                        colors: [Color.blue.opacity(0.8), Color.purple.opacity(0.8)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                    .frame(width: 242, height: 110)
+                }
 
-                HStack(spacing: 8) {
-                    HStack(spacing: 4) {
+                // Top Badges & Controls
+                HStack {
+                    HStack(spacing: 3) {
                         Image(systemName: "display")
-                            .foregroundColor(.blue)
-                        Text("Desktop: \(currentDesktopTitle)")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundColor(.primary)
+                        Text("Desktop")
                     }
-                    .padding(.horizontal, 6)
+                    .font(.system(size: 9, weight: .bold))
+                    .padding(.horizontal, 5)
                     .padding(.vertical, 2)
-                    .background(Color.blue.opacity(0.12))
+                    .background(Color.blue)
+                    .foregroundColor(.white)
                     .cornerRadius(4)
 
-                    HStack(spacing: 4) {
-                        Image(systemName: "lock.shield.fill")
-                            .foregroundColor(.purple)
-                        Text("Lock Screen: \(currentLockScreenTitle)")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundColor(.primary)
+                    Spacer()
+
+                    // Play/Pause button
+                    Button(action: {
+                        WallpaperEngine.shared.togglePlayPause()
+                        refreshTrigger = UUID()
+                    }) {
+                        Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                            .font(.system(size: 16))
+                            .foregroundColor(.white)
+                            .shadow(radius: 2)
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                    .help(isPlaying ? "Pause wallpaper" : "Resume wallpaper")
+                }
+                .padding(6)
+
+                // Bottom title overlay
+                VStack {
+                    Spacer()
+                    HStack {
+                        Text(currentDesktopTitle)
+                            .font(.system(size: 10, weight: .bold))
+                            .lineLimit(1)
+                            .foregroundColor(.white)
+                            .shadow(color: .black.opacity(0.8), radius: 2)
+                        Spacer()
+                        Text(String(format: "%.2fx", activeDesktopRate))
+                            .font(.system(size: 9, weight: .bold, design: .monospaced))
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(Color.black.opacity(0.6))
+                            .foregroundColor(.white)
+                            .cornerRadius(3)
                     }
                     .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Color.purple.opacity(0.12))
-                    .cornerRadius(4)
+                    .padding(.vertical, 4)
+                    .background(
+                        LinearGradient(
+                            colors: [Color.clear, Color.black.opacity(0.75)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
                 }
             }
+            .frame(width: 242, height: 110)
+            .cornerRadius(8)
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(Color.blue.opacity(0.4), lineWidth: 1)
+            )
 
-            Spacer()
+            // Dynamic Playback Speed / Time Scale Slider & Presets for Desktop
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Image(systemName: "speedometer")
+                        .font(.system(size: 9))
+                        .foregroundColor(.blue)
+                    Text("Time Scale: \(String(format: "%.2fx", activeDesktopRate))")
+                        .font(.system(size: 10, weight: .semibold))
+                    Spacer()
+                }
 
+                Slider(value: $activeDesktopRate, in: 0.25...2.50, step: 0.05) { editing in
+                    if !editing {
+                        WallpaperEngine.shared.setPlaybackRate(activeDesktopRate)
+                    }
+                }
+                .onChange(of: activeDesktopRate) { newRate in
+                    WallpaperEngine.shared.setPlaybackRate(newRate)
+                }
+
+                // Presets
+                HStack(spacing: 3) {
+                    ForEach(ratePresets, id: \.self) { p in
+                        Button(action: {
+                            activeDesktopRate = p
+                            WallpaperEngine.shared.setPlaybackRate(p)
+                        }) {
+                            Text(String(format: "%.1fx", p))
+                                .font(.system(size: 9, weight: abs(activeDesktopRate - p) < 0.05 ? .bold : .regular))
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 2)
+                                .background(abs(activeDesktopRate - p) < 0.05 ? Color.blue : Color(NSColor.separatorColor).opacity(0.2))
+                                .foregroundColor(abs(activeDesktopRate - p) < 0.05 ? .white : .primary)
+                                .cornerRadius(3)
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                    }
+                }
+            }
+            .padding(6)
+            .background(Color(NSColor.controlBackgroundColor).opacity(0.5))
+            .cornerRadius(6)
+        }
+    }
+
+    private var miniLockScreenPreviewCard: some View {
+        let stillImg = WallpaperEngine.shared.stillFrameImage(for: lockScreenItem)
+
+        return ZStack(alignment: .topLeading) {
+            if let img = stillImg {
+                Image(nsImage: img)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 242, height: 80)
+                    .clipped()
+            } else {
+                LinearGradient(
+                    colors: [Color.purple.opacity(0.8), Color.indigo.opacity(0.8)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                .frame(width: 242, height: 80)
+            }
+
+            // Top Badges
+            HStack {
+                HStack(spacing: 3) {
+                    Image(systemName: "lock.fill")
+                    Text("Lock Screen")
+                }
+                .font(.system(size: 9, weight: .bold))
+                .padding(.horizontal, 5)
+                .padding(.vertical, 2)
+                .background(Color.purple)
+                .foregroundColor(.white)
+                .cornerRadius(4)
+
+                Spacer()
+            }
+            .padding(6)
+
+            // Bottom title overlay
+            VStack {
+                Spacer()
+                HStack {
+                    Text(currentLockScreenTitle)
+                        .font(.system(size: 10, weight: .bold))
+                        .lineLimit(1)
+                        .foregroundColor(.white)
+                        .shadow(color: .black.opacity(0.8), radius: 2)
+                    Spacer()
+                }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 4)
+                .background(
+                    LinearGradient(
+                        colors: [Color.clear, Color.black.opacity(0.75)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+            }
+        }
+        .frame(width: 242, height: 80)
+        .cornerRadius(8)
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.purple.opacity(0.4), lineWidth: 1)
+        )
+    }
+
+    // MARK: - Right Main Top Bar
+
+    private var mainTopBar: some View {
+        HStack(spacing: 12) {
             // Live Search Field
-            HStack(spacing: 6) {
+            HStack(spacing: 8) {
                 if isSearchingBackend {
                     ProgressView()
                         .scaleEffect(0.6)
@@ -115,18 +495,18 @@ public struct GalleryView: View {
                         .foregroundColor(.secondary)
                 }
 
-                TextField("Search live (e.g. toad, cyberpunk, anime)...", text: $searchText, onCommit: {
-                    performLiveSearch(query: searchText, marketplace: selectedMarketplace, category: selectedCategory)
+                TextField("Search live wallpapers across selected marketplaces...", text: $searchText, onCommit: {
+                    performLiveMultiSearch(query: searchText, marketplaces: selectedMarketplaces, categories: selectedCategories)
                 })
                 .textFieldStyle(PlainTextFieldStyle())
                 .onChange(of: searchText) { newValue in
-                    performLiveSearch(query: newValue, marketplace: selectedMarketplace, category: selectedCategory)
+                    performLiveMultiSearch(query: newValue, marketplaces: selectedMarketplaces, categories: selectedCategories)
                 }
 
                 if !searchText.isEmpty {
                     Button(action: {
                         searchText = ""
-                        performLiveSearch(query: "", marketplace: selectedMarketplace, category: selectedCategory)
+                        performLiveMultiSearch(query: "", marketplaces: selectedMarketplaces, categories: selectedCategories)
                     }) {
                         Image(systemName: "xmark.circle.fill")
                             .foregroundColor(.secondary)
@@ -138,124 +518,10 @@ public struct GalleryView: View {
             .padding(.vertical, 6)
             .background(Color(NSColor.controlBackgroundColor))
             .cornerRadius(8)
-            .frame(width: 290)
-
-            Button(action: {
-                performLiveSearch(query: searchText, marketplace: selectedMarketplace, category: selectedCategory)
-                showToast("Refreshing live connectors...")
-            }) {
-                Image(systemName: "arrow.clockwise")
-                    .font(.system(size: 13, weight: .medium))
-            }
-            .buttonStyle(PlainButtonStyle())
-            .help("Refresh Live Marketplaces")
-        }
-        .padding(16)
-    }
-
-    // MARK: - Filter Bar (Dropdowns instead of horizontal category tabs)
-
-    private var filterBar: some View {
-        HStack(spacing: 12) {
-            // 1. Marketplace Filter Dropdown
-            Menu {
-                ForEach(marketplaces, id: \.self) { m in
-                    Button(action: {
-                        selectedMarketplace = m
-                        performLiveSearch(query: searchText, marketplace: m, category: selectedCategory)
-                    }) {
-                        HStack {
-                            Text(m)
-                            if selectedMarketplace == m {
-                                Image(systemName: "checkmark")
-                            }
-                        }
-                    }
-                }
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "globe.americas.fill")
-                        .foregroundColor(.accentColor)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text("Marketplace")
-                            .font(.system(size: 9))
-                            .foregroundColor(.secondary)
-                        Text(selectedMarketplace)
-                            .font(.system(size: 12, weight: .semibold))
-                    }
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundColor(.secondary)
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
-                .background(Color(NSColor.controlBackgroundColor))
-                .cornerRadius(7)
-            }
-            .menuStyle(BorderlessButtonMenuStyle())
-
-            // 2. Category Filter Dropdown
-            Menu {
-                ForEach(categories, id: \.self) { c in
-                    Button(action: {
-                        selectedCategory = c
-                        performLiveSearch(query: searchText, marketplace: selectedMarketplace, category: c)
-                    }) {
-                        HStack {
-                            Text(c)
-                            if selectedCategory == c {
-                                Image(systemName: "checkmark")
-                            }
-                        }
-                    }
-                }
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "tag.fill")
-                        .foregroundColor(.purple)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text("Category")
-                            .font(.system(size: 9))
-                            .foregroundColor(.secondary)
-                        Text(selectedCategory)
-                            .font(.system(size: 12, weight: .semibold))
-                    }
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundColor(.secondary)
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
-                .background(Color(NSColor.controlBackgroundColor))
-                .cornerRadius(7)
-            }
-            .menuStyle(BorderlessButtonMenuStyle())
-
-            // Reset filters button if customized
-            if selectedMarketplace != "🌐 All Marketplaces" || selectedCategory != "All Categories" || !searchText.isEmpty {
-                Button(action: {
-                    selectedMarketplace = "🌐 All Marketplaces"
-                    selectedCategory = "All Categories"
-                    searchText = ""
-                    performLiveSearch(query: "", marketplace: "🌐 All Marketplaces", category: "All Categories")
-                }) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "arrow.counterclockwise")
-                        Text("Reset Filters")
-                    }
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(.secondary)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 5)
-                    .background(Color(NSColor.controlBackgroundColor))
-                    .cornerRadius(6)
-                }
-                .buttonStyle(PlainButtonStyle())
-            }
 
             Spacer()
 
-            // Result count indicator
+            // Status Pill
             HStack(spacing: 6) {
                 Circle()
                     .fill(isSearchingBackend ? Color.orange : Color.green)
@@ -284,40 +550,49 @@ public struct GalleryView: View {
             .padding(.vertical, 5)
             .background(Color(NSColor.controlBackgroundColor).opacity(0.6))
             .cornerRadius(12)
+
+            // Refresh Button
+            Button(action: {
+                performLiveMultiSearch(query: searchText, marketplaces: selectedMarketplaces, categories: selectedCategories)
+                showToast("Refreshed live catalog feeds.")
+            }) {
+                Image(systemName: "arrow.clockwise")
+                    .font(.system(size: 13, weight: .medium))
+            }
+            .buttonStyle(PlainButtonStyle())
+            .help("Refresh Live Marketplaces")
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-        .background(Color(NSColor.windowBackgroundColor))
+        .padding(14)
     }
 
-    // MARK: - Grid View
+    // MARK: - Gallery Grid
 
     private var galleryGrid: some View {
         ScrollView {
             if isSearchingBackend && items.isEmpty {
                 VStack(spacing: 12) {
-                    Spacer().frame(height: 70)
-                    ProgressView("Connecting to live marketplace...")
-                    Text("Fetching feeds from \(selectedMarketplace)...")
+                    Spacer().frame(height: 80)
+                    ProgressView("Connecting to live marketplaces...")
+                    Text("Fetching feeds from selected sources...")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                 }
                 .frame(maxWidth: .infinity)
             } else if items.isEmpty {
                 VStack(spacing: 10) {
-                    Spacer().frame(height: 70)
+                    Spacer().frame(height: 80)
                     Image(systemName: "magnifyingglass")
                         .font(.system(size: 32))
                         .foregroundColor(.secondary)
                     Text("No wallpapers found")
                         .font(.headline)
-                    Text("Try changing your keyword, marketplace, or category filter.")
+                    Text("Try adjusting your keyword, checking more marketplaces, or categories in the sidebar.")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                 }
                 .frame(maxWidth: .infinity)
             } else {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 280, maximum: 330), spacing: 16)], spacing: 16) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 280, maximum: 340), spacing: 16)], spacing: 16) {
                     ForEach(items) { item in
                         wallpaperCard(for: item)
                             .onAppear {
@@ -330,7 +605,7 @@ public struct GalleryView: View {
                 }
                 .padding(16)
 
-                // Infinite Scroll Bottom Indicator & Trigger
+                // Infinite Scroll Bottom Trigger
                 if canLoadMore && !items.isEmpty {
                     VStack(spacing: 8) {
                         if isLoadingMore {
@@ -374,9 +649,10 @@ public struct GalleryView: View {
             item.title.lowercased().contains(currentLockScreenTitle.lowercased())
         let progress = downloader.downloadProgress[item.id]
         let status = downloader.downloadStatus[item.id]
+        let savedSpeed = WallpaperEngine.shared.getPlaybackRate(for: item.id)
 
         return VStack(alignment: .leading, spacing: 10) {
-            // Real Preview Thumbnail
+            // Preview Thumbnail
             ZStack(alignment: .topTrailing) {
                 ThumbnailImageView(item: item)
                     .frame(height: 140)
@@ -413,7 +689,7 @@ public struct GalleryView: View {
                 .padding(6)
                 .frame(maxWidth: .infinity, alignment: .topLeading)
 
-                // Resolution & Source Badges
+                // Resolution & Badges
                 HStack(spacing: 4) {
                     if isDownloaded {
                         Text("SAVED")
@@ -423,26 +699,20 @@ public struct GalleryView: View {
                             .background(Color.green.opacity(0.85))
                             .foregroundColor(.white)
                             .cornerRadius(4)
-                    } else if item.isLocalCopy {
-                        Text("LOCAL")
-                            .font(.system(size: 9, weight: .bold))
+                    }
+
+                    if abs(savedSpeed - 1.0) > 0.05 {
+                        Text(String(format: "%.2fx", savedSpeed))
+                            .font(.system(size: 9, weight: .bold, design: .monospaced))
                             .padding(.horizontal, 5)
                             .padding(.vertical, 2)
-                            .background(Color.blue.opacity(0.85))
+                            .background(Color.orange.opacity(0.85))
                             .foregroundColor(.white)
                             .cornerRadius(4)
                     }
 
                     Text(item.resolution)
                         .font(.system(size: 10, weight: .bold))
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color.black.opacity(0.7))
-                        .foregroundColor(.white)
-                        .cornerRadius(4)
-
-                    Text(item.fileSizeString)
-                        .font(.system(size: 10, weight: .medium))
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
                         .background(Color.black.opacity(0.7))
@@ -544,7 +814,20 @@ public struct GalleryView: View {
                     }
                     .buttonStyle(PlainButtonStyle())
 
-                    // Button 3: More actions (Set Both, Open Page)
+                    // Button 3: Configuration (Time Scale / Speed / Audio)
+                    Button(action: {
+                        configuringItem = item
+                    }) {
+                        Image(systemName: "slider.horizontal.3")
+                            .font(.system(size: 12, weight: .semibold))
+                            .frame(width: 26, height: 26)
+                            .background(Color(NSColor.controlBackgroundColor))
+                            .cornerRadius(6)
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                    .help("Configure Playback Speed (Time Scale), Audio, and Scaling")
+
+                    // Button 4: More actions menu
                     Menu {
                         Button(action: {
                             downloader.downloadAndApply(item: item, target: .both) { success in
@@ -554,6 +837,12 @@ public struct GalleryView: View {
                             }
                         }) {
                             Label("Set Both Desktop & Lock Screen", systemImage: "sparkles")
+                        }
+
+                        Button(action: {
+                            configuringItem = item
+                        }) {
+                            Label("Configure Wallpaper Settings...", systemImage: "gearshape")
                         }
 
                         if !item.isLocalCopy {
@@ -599,6 +888,19 @@ public struct GalleryView: View {
         if source.contains("Apple") { return .green }
         if source.contains("Wallpaper Engine") { return .indigo }
         return .secondary
+    }
+
+    private func categoryEmoji(for category: String) -> String {
+        switch category {
+        case "Anime & Manga": return "🌸"
+        case "Gaming": return "🎮"
+        case "Sci-Fi & Cyberpunk": return "🤖"
+        case "Nature & Space": return "🌲"
+        case "Lofi & Aesthetic": return "☕"
+        case "Cars & Vehicles": return "🏎️"
+        case "Fantasy & Abstract": return "🎨"
+        default: return "🏷️"
+        }
     }
 
     // MARK: - Direct Video URL Downloader
@@ -702,26 +1004,49 @@ public struct GalleryView: View {
                 showToast("Custom wallpaper \"\(title)\" set!")
                 customURLText = ""
                 customTitleText = ""
+                showCustomURLView = false
             }
         }
     }
 
-    // MARK: - Helpers
+    // MARK: - Filter Toggles & Multi Search
 
-    private func performLiveSearch(query: String, marketplace: String, category: String) {
+    private func toggleMarketplace(_ m: String) {
+        if selectedMarketplaces.contains(m) {
+            selectedMarketplaces.remove(m)
+        } else {
+            selectedMarketplaces.insert(m)
+        }
+        performLiveMultiSearch(query: searchText, marketplaces: selectedMarketplaces, categories: selectedCategories)
+    }
+
+    private func toggleCategory(_ c: String) {
+        if selectedCategories.contains(c) {
+            selectedCategories.remove(c)
+        } else {
+            selectedCategories.insert(c)
+        }
+        performLiveMultiSearch(query: searchText, marketplaces: selectedMarketplaces, categories: selectedCategories)
+    }
+
+    private func performLiveMultiSearch(query: String, marketplaces: Set<String>, categories: Set<String>) {
         searchTask?.cancel()
         isSearchingBackend = true
         currentPage = 1
         canLoadMore = true
 
         searchTask = Task {
-            // Debounce when actively typing text
             if !query.isEmpty {
                 try? await Task.sleep(nanoseconds: 300_000_000)
             }
             guard !Task.isCancelled else { return }
 
-            let results = await CatalogService.shared.searchLive(query: query, marketplace: marketplace, category: category, page: 1)
+            let results = await CatalogService.shared.searchLiveMulti(
+                query: query,
+                marketplaces: marketplaces,
+                categories: categories,
+                page: 1
+            )
             guard !Task.isCancelled else { return }
 
             await MainActor.run {
@@ -738,10 +1063,10 @@ public struct GalleryView: View {
         let nextPage = currentPage + 1
 
         Task {
-            let newItems = await CatalogService.shared.searchLive(
+            let newItems = await CatalogService.shared.searchLiveMulti(
                 query: searchText,
-                marketplace: selectedMarketplace,
-                category: selectedCategory,
+                marketplaces: selectedMarketplaces,
+                categories: selectedCategories,
                 page: nextPage
             )
 
@@ -752,8 +1077,9 @@ public struct GalleryView: View {
                     var existingTitles = Set(self.items.map { $0.title.lowercased() })
                     var toAppend: [CatalogItem] = []
                     for item in newItems {
-                        if !existingTitles.contains(item.title.lowercased()) {
-                            existingTitles.insert(item.title.lowercased())
+                        let key = item.title.lowercased()
+                        if !existingTitles.contains(key) {
+                            existingTitles.insert(key)
                             toAppend.append(item)
                         }
                     }
