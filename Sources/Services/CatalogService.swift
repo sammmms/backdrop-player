@@ -156,15 +156,7 @@ public final class CatalogService {
         // 7. Downloaded / Ready
         if activeMarketplaces.contains("💾 Downloaded / Ready") && page == 1 {
             let task = Task { () -> [CatalogItem] in
-                let dir = BackdropLibraryService.shared.localWallpapersDirectory
-                let localFiles = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
-                var list = self.fetchCatalog().filter { item in
-                    localFiles.contains(where: { $0.lowercased().contains(item.title.lowercased()) }) || item.isLocalCopy
-                }
-                if !trimmedQuery.isEmpty {
-                    list = list.filter { $0.title.localizedCaseInsensitiveContains(trimmedQuery) }
-                }
-                return list
+                return self.fetchDownloadedItems(matching: trimmedQuery)
             }
             tasks.append(task)
         }
@@ -277,15 +269,7 @@ public final class CatalogService {
 
         case "💾 Downloaded / Ready":
             guard page == 1 else { return [] }
-            let dir = BackdropLibraryService.shared.localWallpapersDirectory
-            let localFiles = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
-            var list = fetchCatalog().filter { item in
-                localFiles.contains(where: { $0.lowercased().contains(item.title.lowercased()) }) || item.isLocalCopy
-            }
-            if !trimmedQuery.isEmpty {
-                list = list.filter { $0.title.localizedCaseInsensitiveContains(trimmedQuery) }
-            }
-            return list
+            return fetchDownloadedItems(matching: trimmedQuery)
 
         case "🔗 Custom Video URL":
             return []
@@ -375,6 +359,96 @@ public final class CatalogService {
             $0.category.localizedCaseInsensitiveContains(kw) ||
             $0.title.localizedCaseInsensitiveContains(kw)
         }
+    }
+
+    // MARK: - Downloaded Wallpapers Scanner
+
+    public func fetchDownloadedItems(matching query: String = "") -> [CatalogItem] {
+        let dir = BackdropLibraryService.shared.localWallpapersDirectory
+        let stillsDir = dir.appendingPathComponent(".stills")
+        let localFiles = (try? FileManager.default.contentsOfDirectory(
+            at: dir,
+            includingPropertiesForKeys: [.fileSizeKey],
+            options: [.skipsHiddenFiles]
+        )) ?? []
+
+        var results: [CatalogItem] = []
+        var seenTitles = Set<String>()
+
+        for fileURL in localFiles {
+            let ext = fileURL.pathExtension.lowercased()
+            guard ["mov", "mp4", "m4v", "gif", "webm", "png", "jpg", "jpeg", "heic"].contains(ext) else { continue }
+            let title = fileURL.deletingPathExtension().lastPathComponent
+            let lowerTitle = title.lowercased()
+            guard !seenTitles.contains(lowerTitle) else { continue }
+            seenTitles.insert(lowerTitle)
+
+            if !query.isEmpty && !title.localizedCaseInsensitiveContains(query) {
+                continue
+            }
+
+            let size = (try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+            let sizeStr = size > 1024 * 1024
+                ? String(format: "%.1f MB", Double(size) / (1024 * 1024))
+                : String(format: "%d KB", size / 1024)
+
+            // Look for still image
+            var thumbURL: URL? = nil
+            for sExt in ["jpg", "png", "heic"] {
+                let candidate = stillsDir.appendingPathComponent("\(title).\(sExt)")
+                if FileManager.default.fileExists(atPath: candidate.path) {
+                    thumbURL = candidate
+                    break
+                }
+            }
+
+            // Check if catalog item exists in online/seed catalog
+            if let existing = fetchCatalog().first(where: { $0.title.lowercased() == lowerTitle }) {
+                results.append(
+                    CatalogItem(
+                        id: existing.id,
+                        title: existing.title,
+                        category: existing.category,
+                        thumbnailURL: thumbURL ?? existing.thumbnailURL ?? fileURL,
+                        previewURL: fileURL,
+                        downloadURL: fileURL,
+                        resolution: existing.resolution,
+                        fileSizeString: sizeStr,
+                        sourceDescription: existing.sourceDescription,
+                        isLocalCopy: true
+                    )
+                )
+            } else {
+                let isVid = ["mov", "mp4", "m4v", "webm"].contains(ext)
+                results.append(
+                    CatalogItem(
+                        id: "downloaded-\(title)",
+                        title: title,
+                        category: isVid ? "Video Wallpaper" : "Image Wallpaper",
+                        thumbnailURL: thumbURL ?? fileURL,
+                        previewURL: fileURL,
+                        downloadURL: fileURL,
+                        resolution: isVid ? "HD/4K Video" : "Hi-Res Image",
+                        fileSizeString: sizeStr,
+                        sourceDescription: "Downloaded Asset",
+                        isLocalCopy: true
+                    )
+                )
+            }
+        }
+
+        // Also check localFeaturedItems that exist on disk
+        for feat in localFeaturedItems {
+            let lower = feat.title.lowercased()
+            if !seenTitles.contains(lower) {
+                if query.isEmpty || feat.title.localizedCaseInsensitiveContains(query) {
+                    seenTitles.insert(lower)
+                    results.append(feat)
+                }
+            }
+        }
+
+        return results
     }
 
     // MARK: - Featured Clean Local Wallpapers

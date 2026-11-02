@@ -79,7 +79,8 @@ public final class DesktopHutBackendService {
 
             let slug = String(html[hrefRange]).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
             let thumbURL = URL(string: img)
-            let videoURL = URL(string: vid) ?? URL(string: href)!
+            let pageURL = URL(string: href) ?? URL(string: "https://www.desktophut.com")!
+            let previewVideoURL = URL(string: vid)
 
             items.append(
                 CatalogItem(
@@ -87,11 +88,11 @@ public final class DesktopHutBackendService {
                     title: title,
                     category: defaultCategory == "All Categories" ? "Gaming & Tech" : defaultCategory,
                     thumbnailURL: thumbURL,
-                    previewURL: URL(string: vid),
-                    downloadURL: videoURL,
+                    previewURL: previewVideoURL,
+                    downloadURL: pageURL,
                     resolution: "4K / 1080p MP4",
                     fileSizeString: "DesktopHut",
-                    sourceDescription: "DesktopHut",
+                    sourceDescription: "DesktopHut (4K PC)",
                     isLocalCopy: false
                 )
             )
@@ -100,29 +101,56 @@ public final class DesktopHutBackendService {
     }
 
     public func resolveHighResDownloadURL(from pageURLString: String) async -> URL? {
+        if pageURLString.contains("/files/") && pageURLString.hasSuffix(".mp4") {
+            return URL(string: pageURLString)
+        }
+
         guard let url = URL(string: pageURLString) else { return nil }
         var request = URLRequest(url: url)
-        request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko)", forHTTPHeaderField: "User-Agent")
-        request.timeoutInterval = 8.0
+        request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36", forHTTPHeaderField: "User-Agent")
+        request.timeoutInterval = 10.0
 
         guard let (data, _) = try? await URLSession.shared.data(for: request),
               let html = String(data: data, encoding: .utf8) else { return nil }
 
-        // 1. Find primaryDownloadBtn href
-        let pattern1 = #"id="primaryDownloadBtn"[^>]*href="([^"]+)""#
-        if let regex = try? NSRegularExpression(pattern: pattern1),
+        // Strategy 1: primaryDownloadBtn href (href can be before or after id)
+        let btnPatterns = [
+            #"<a\s+[^>]*href=["']([^"']+\.mp4)["'][^>]*id=["']primaryDownloadBtn["']"#,
+            #"<a\s+[^>]*id=["']primaryDownloadBtn["'][^>]*href=["']([^"']+\.mp4)["']"#
+        ]
+        for pat in btnPatterns {
+            if let regex = try? NSRegularExpression(pattern: pat, options: .caseInsensitive),
+               let match = regex.firstMatch(in: html, range: NSRange(html.startIndex..., in: html)),
+               let r = Range(match.range(at: 1), in: html) {
+                let link = String(html[r])
+                if let u = URL(string: link) { return u }
+            }
+        }
+
+        // Strategy 2: "contentUrl": "https://...desktophut.com/files/...mp4"
+        let contentUrlPat = #""contentUrl":\s*"([^"]+\.mp4)""#
+        if let regex = try? NSRegularExpression(pattern: contentUrlPat, options: .caseInsensitive),
            let match = regex.firstMatch(in: html, range: NSRange(html.startIndex..., in: html)),
            let r = Range(match.range(at: 1), in: html) {
-            let link = String(html[r])
+            let link = String(html[r]).replacingOccurrences(of: "\\/", with: "/")
             if let u = URL(string: link) { return u }
         }
 
-        // 2. Find any https://www.desktophut.com/files/XXXXX.mp4 link
-        let pattern2 = #"https://(?:www\.)?desktophut\.com/files/[^"\s\\]+\.mp4"#
-        if let regex = try? NSRegularExpression(pattern: pattern2),
+        // Strategy 3: Any https://(media.|www.)?desktophut.com/files/...mp4 link
+        let filesPat = #"https://(?:media\.|www\.)?desktophut\.com/files/[^\s"'<>\\]+\.mp4"#
+        if let regex = try? NSRegularExpression(pattern: filesPat, options: .caseInsensitive),
            let match = regex.firstMatch(in: html, range: NSRange(html.startIndex..., in: html)),
            let r = Range(match.range(at: 0), in: html) {
-            let link = String(html[r])
+            let link = String(html[r]).replacingOccurrences(of: "\\/", with: "/")
+            if let u = URL(string: link) { return u }
+        }
+
+        // Strategy 4: Fallback to player video if present (for scene-based cards)
+        let playerPat = #"https://(?:media\.|www\.)?desktophut\.com/previews/[^\s"'<>\\]+-player\.mp4"#
+        if let regex = try? NSRegularExpression(pattern: playerPat, options: .caseInsensitive),
+           let match = regex.firstMatch(in: html, range: NSRange(html.startIndex..., in: html)),
+           let r = Range(match.range(at: 0), in: html) {
+            let link = String(html[r]).replacingOccurrences(of: "\\/", with: "/")
             if let u = URL(string: link) { return u }
         }
 

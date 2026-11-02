@@ -207,6 +207,31 @@ public final class BackdropLibraryService {
         saveCustomItems(existing)
     }
 
+    @discardableResult
+    public func deleteWallpaper(item: WallpaperItem) -> Bool {
+        var deleted = false
+        if FileManager.default.fileExists(atPath: item.fileURL.path) {
+            try? FileManager.default.removeItem(at: item.fileURL)
+            deleted = true
+        }
+        if item.isCustom {
+            removeCustomWallpaper(id: item.id)
+            deleted = true
+        }
+
+        // Remove still thumbnail if present
+        let stillsDir = localWallpapersDirectory.appendingPathComponent(".stills")
+        for ext in ["jpg", "png", "heic"] {
+            let stillCandidate = stillsDir.appendingPathComponent("\(item.title).\(ext)")
+            if FileManager.default.fileExists(atPath: stillCandidate.path) {
+                try? FileManager.default.removeItem(at: stillCandidate)
+            }
+        }
+
+        NotificationCenter.default.post(name: NSNotification.Name("WallpaperEngineStateChanged"), object: nil)
+        return deleted
+    }
+
     private func loadCustomItems() -> [WallpaperItem] {
         guard let data = UserDefaults.standard.data(forKey: customItemsKey) else { return [] }
         guard let list = try? JSONDecoder().decode([SavedCustomItem].self, from: data) else { return [] }

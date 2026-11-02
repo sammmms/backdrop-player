@@ -199,6 +199,18 @@ public final class StatusBarController: NSObject, NSMenuDelegate {
                 miBoth.representedObject = item
                 sub.addItem(miBoth)
 
+                sub.addItem(NSMenuItem.separator())
+
+                let miReveal = NSMenuItem(title: "Reveal in Finder", action: #selector(handleRevealInFinder(_:)), keyEquivalent: "")
+                miReveal.target = self
+                miReveal.representedObject = item
+                sub.addItem(miReveal)
+
+                let miDelete = NSMenuItem(title: "Delete Wallpaper from Disk...", action: #selector(handleDeleteWallpaper(_:)), keyEquivalent: "")
+                miDelete.target = self
+                miDelete.representedObject = item
+                sub.addItem(miDelete)
+
                 menuItem.submenu = sub
                 menu.addItem(menuItem)
             }
@@ -234,6 +246,18 @@ public final class StatusBarController: NSObject, NSMenuDelegate {
                 miLock.target = self
                 miLock.representedObject = item
                 sub.addItem(miLock)
+
+                sub.addItem(NSMenuItem.separator())
+
+                let miReveal = NSMenuItem(title: "Reveal in Finder", action: #selector(handleRevealInFinder(_:)), keyEquivalent: "")
+                miReveal.target = self
+                miReveal.representedObject = item
+                sub.addItem(miReveal)
+
+                let miDelete = NSMenuItem(title: "Delete Wallpaper from Disk...", action: #selector(handleDeleteWallpaper(_:)), keyEquivalent: "")
+                miDelete.target = self
+                miDelete.representedObject = item
+                sub.addItem(miDelete)
 
                 menuItem.submenu = sub
                 menu.addItem(menuItem)
@@ -440,6 +464,27 @@ public final class StatusBarController: NSObject, NSMenuDelegate {
 
     @objc private func handleOpenAssetsInFinder() {
         NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: libraryService.localWallpapersDirectory.path)
+    }
+
+    @objc private func handleRevealInFinder(_ sender: NSMenuItem) {
+        guard let item = sender.representedObject as? WallpaperItem else { return }
+        NSWorkspace.shared.selectFile(item.fileURL.path, inFileViewerRootedAtPath: item.fileURL.deletingLastPathComponent().path)
+    }
+
+    @objc private func handleDeleteWallpaper(_ sender: NSMenuItem) {
+        guard let item = sender.representedObject as? WallpaperItem else { return }
+
+        let alert = NSAlert()
+        alert.messageText = "Delete Wallpaper?"
+        alert.informativeText = "Are you sure you want to delete \"\(item.title)\" from your Mac? This will remove the file from disk."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+
+        if alert.runModal() == .alertFirstButtonReturn {
+            libraryService.deleteWallpaper(item: item)
+            loadWallpapers()
+        }
     }
 
     @objc private func handleQuit() {

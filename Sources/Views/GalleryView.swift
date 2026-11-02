@@ -646,6 +646,14 @@ public struct GalleryView: View {
                             }) {
                                 Label("Reveal in Finder", systemImage: "folder")
                             }
+
+                            Divider()
+
+                            Button(role: .destructive, action: {
+                                confirmAndDelete(item: item)
+                            }) {
+                                Label("Delete Wallpaper from Disk", systemImage: "trash")
+                            }
                         }
                     } label: {
                         Image(systemName: "ellipsis")
@@ -1257,6 +1265,50 @@ public struct GalleryView: View {
                 }
                 .buttonStyle(PlainButtonStyle())
             }
+
+            // Delete from disk button if downloaded
+            if downloader.isDownloaded(item: item) {
+                Divider()
+
+                Button(action: {
+                    confirmAndDelete(item: item)
+                }) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "trash")
+                        Text("Delete Wallpaper from Disk")
+                    }
+                    .font(.system(size: 11, weight: .semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 6)
+                    .background(Color.red.opacity(0.12))
+                    .foregroundColor(.red)
+                    .cornerRadius(6)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(PlainButtonStyle())
+                .help("Permanently delete this downloaded wallpaper from your Mac")
+            }
+        }
+    }
+
+    private func confirmAndDelete(item: CatalogItem) {
+        let alert = NSAlert()
+        alert.messageText = "Delete Downloaded Wallpaper?"
+        alert.informativeText = "Are you sure you want to delete \"\(item.title)\" from your Mac? The file will be permanently removed from disk."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+
+        let response = alert.runModal()
+        if response == .alertFirstButtonReturn {
+            downloader.deleteDownloaded(item: item)
+            showToast("🗑️ Deleted \"\(item.title)\" from local wallpapers")
+            items.removeAll { $0.id == item.id || $0.title.lowercased() == item.title.lowercased() }
+            if selectedItem?.id == item.id || selectedItem?.title.lowercased() == item.title.lowercased() {
+                selectedItem = nil
+            }
+            refreshTrigger = UUID()
+            NotificationCenter.default.post(name: NSNotification.Name("WallpaperEngineStateChanged"), object: nil)
         }
     }
 

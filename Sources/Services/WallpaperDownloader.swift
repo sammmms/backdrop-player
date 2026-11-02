@@ -62,7 +62,75 @@ public final class WallpaperDownloader: NSObject, ObservableObject, URLSessionDo
 
     public func isDownloaded(item: CatalogItem) -> Bool {
         let destURL = destinationURL(for: item)
-        return FileManager.default.fileExists(atPath: destURL.path)
+        if FileManager.default.fileExists(atPath: destURL.path) {
+            // If file size is tiny (< 100 KB) for a video, it was an old preview bug
+            if let attrs = try? FileManager.default.attributesOfItem(atPath: destURL.path),
+               let size = attrs[.size] as? Int64,
+               size < 100 * 1024 {
+                let ext = destURL.pathExtension.lowercased()
+                if ["mp4", "mov", "webm", "m4v"].contains(ext) {
+                    return false
+                }
+            }
+            return true
+        }
+
+        if item.isLocalCopy && FileManager.default.fileExists(atPath: item.downloadURL.path) {
+            return true
+        }
+
+        return false
+    }
+
+    @discardableResult
+    public func deleteDownloaded(item: CatalogItem) -> Bool {
+        var deleted = false
+        let dir = BackdropLibraryService.shared.localWallpapersDirectory
+        let safeTitle = item.title
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ":", with: "-")
+            .replacingOccurrences(of: "\"", with: "")
+            .replacingOccurrences(of: "\\", with: "-")
+            .replacingOccurrences(of: "|", with: "-")
+            .replacingOccurrences(of: "?", with: "")
+            .replacingOccurrences(of: "*", with: "")
+            .replacingOccurrences(of: "<", with: "")
+            .replacingOccurrences(of: ">", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let supportedExtensions = ["mp4", "mov", "gif", "jpg", "jpeg", "png", "heic", "webm"]
+        for e in supportedExtensions {
+            let candidate = dir.appendingPathComponent("\(safeTitle).\(e)")
+            if FileManager.default.fileExists(atPath: candidate.path) {
+                try? FileManager.default.removeItem(at: candidate)
+                deleted = true
+            }
+            let rawCandidate = dir.appendingPathComponent("\(item.title).\(e)")
+            if FileManager.default.fileExists(atPath: rawCandidate.path) {
+                try? FileManager.default.removeItem(at: rawCandidate)
+                deleted = true
+            }
+        }
+
+        if item.isLocalCopy && FileManager.default.fileExists(atPath: item.downloadURL.path) {
+            try? FileManager.default.removeItem(at: item.downloadURL)
+            deleted = true
+        }
+
+        // Remove cached stills if any
+        let stillsDir = dir.appendingPathComponent(".stills")
+        for ext in ["jpg", "png", "heic"] {
+            let stillURL = stillsDir.appendingPathComponent("\(safeTitle).\(ext)")
+            try? FileManager.default.removeItem(at: stillURL)
+            let rawStill = stillsDir.appendingPathComponent("\(item.title).\(ext)")
+            try? FileManager.default.removeItem(at: rawStill)
+        }
+
+        downloadProgress.removeValue(forKey: item.id)
+        downloadStatus.removeValue(forKey: item.id)
+
+        NotificationCenter.default.post(name: NSNotification.Name("WallpaperEngineStateChanged"), object: nil)
+        return deleted
     }
 
     public func destinationURL(for item: CatalogItem, ext: String? = nil) -> URL {
@@ -112,9 +180,17 @@ public final class WallpaperDownloader: NSObject, ObservableObject, URLSessionDo
 
         // 1. Fast path: Already downloaded and exists on disk
         if FileManager.default.fileExists(atPath: dest.path) {
-            applyDownloaded(item: item, fileURL: dest, target: target)
-            completion(true)
-            return
+            let fileSize = (try? dest.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+            let ext = dest.pathExtension.lowercased()
+            let isVideo = ["mov", "mp4", "m4v", "webm"].contains(ext)
+            // If it's a video file and size is less than 300 KB, delete the stale low-res preview and re-download
+            if isVideo && fileSize < 300 * 1024 {
+                try? FileManager.default.removeItem(at: dest)
+            } else {
+                applyDownloaded(item: item, fileURL: dest, target: target)
+                completion(true)
+                return
+            }
         }
 
         // 2. Fast path: Local copy (Pre-installed Backdrop assets or local files)
@@ -126,7 +202,7 @@ public final class WallpaperDownloader: NSObject, ObservableObject, URLSessionDo
 
         // 3. DesktopHut: resolve high-res full video if available
         if item.sourceDescription.contains("DesktopHut") && !item.downloadURL.absoluteString.contains("/files/") {
-            downloadStatus[item.id] = "Resolving high-res video..."
+            downloadStatus[item.id] = "Resolving 4K/HD video link..."
             downloadProgress[item.id] = 0.05
 
             Task {
@@ -146,9 +222,26 @@ public final class WallpaperDownloader: NSObject, ObservableObject, URLSessionDo
                     DispatchQueue.main.async {
                         self.startRemoteDownload(item: resolvedItem, target: target, completion: completion)
                     }
+                } else if let preview = item.previewURL {
+                    let fallbackItem = CatalogItem(
+                        id: item.id,
+                        title: item.title,
+                        category: item.category,
+                        thumbnailURL: item.thumbnailURL,
+                        previewURL: preview,
+                        downloadURL: preview,
+                        resolution: item.resolution,
+                        fileSizeString: item.fileSizeString,
+                        sourceDescription: item.sourceDescription,
+                        isLocalCopy: item.isLocalCopy
+                    )
+                    DispatchQueue.main.async {
+                        self.startRemoteDownload(item: fallbackItem, target: target, completion: completion)
+                    }
                 } else {
                     DispatchQueue.main.async {
-                        self.startRemoteDownload(item: item, target: target, completion: completion)
+                        self.downloadStatus[item.id] = "Could not resolve video stream."
+                        completion(false)
                     }
                 }
             }
