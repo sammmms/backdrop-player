@@ -191,16 +191,28 @@ public final class WallpaperEngine: NSObject {
     }
 
     private final class ScreenSession {
-        let screen: NSScreen
+        let displayID: CGDirectDisplayID
+        var screen: NSScreen
         let window: WallpaperWindow
         var player: AVQueuePlayer?
         var looper: AVPlayerLooper?
         var playerView: AVPlayerView?
         var imageView: NSImageView?
 
-        init(screen: NSScreen, window: WallpaperWindow) {
+        init(displayID: CGDirectDisplayID, screen: NSScreen, window: WallpaperWindow) {
+            self.displayID = displayID
             self.screen = screen
             self.window = window
+        }
+
+        func updateGeometry(for newScreen: NSScreen) {
+            self.screen = newScreen
+            self.window.targetScreen = newScreen
+            self.window.updateFrame(to: newScreen.frame)
+            let bounds = NSRect(origin: .zero, size: newScreen.frame.size)
+            self.window.contentView?.frame = bounds
+            self.playerView?.frame = bounds
+            self.imageView?.frame = bounds
         }
     }
 
@@ -272,8 +284,12 @@ public final class WallpaperEngine: NSObject {
     }
 
     @objc private func handleScreenParametersChanged() {
-        print("[WallpaperEngine] Screen configuration changed, rebuilding display windows...")
-        reloadCurrentWallpaper()
+        print("[WallpaperEngine] Screen configuration/resolution changed, dynamically updating display geometry...")
+        reconcileDisplaySessions()
+        // Debounced pass after resolution transition completes
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+            self?.reconcileDisplaySessions()
+        }
     }
 
     @objc private func handleScreensDidSleep() {
@@ -283,8 +299,9 @@ public final class WallpaperEngine: NSObject {
     }
 
     @objc private func handleScreensDidWake() {
-        print("[WallpaperEngine] Screens woke up, resuming playback...")
+        print("[WallpaperEngine] Screens woke up, resuming playback and updating geometry...")
         isSystemSleeping = false
+        reconcileDisplaySessions()
         if isPlaying {
             resumeInternal()
         }
@@ -300,6 +317,43 @@ public final class WallpaperEngine: NSObject {
 
     private let syncQueue = DispatchQueue(label: "com.backdrop.wallpaperSyncQueue", qos: .userInitiated)
 
+    public func reconcileDisplaySessions(for item: WallpaperItem? = nil) {
+        let targetItem = item ?? currentDesktopWallpaper
+        guard let itemToApply = targetItem else { return }
+
+        let currentScreens = NSScreen.screens
+        var activeSessions: [ScreenSession] = []
+        let currentDisplayIDs = Set(currentScreens.map { $0.displayID })
+
+        for screen in currentScreens {
+            let dID = screen.displayID
+            if let existing = sessions.first(where: { $0.displayID == dID }) {
+                // Dynamically update window frame and content view geometry to the new screen frame
+                existing.updateGeometry(for: screen)
+                updateSessionContent(session: existing, item: itemToApply)
+                activeSessions.append(existing)
+            } else {
+                let session = createSession(for: screen, item: itemToApply)
+                activeSessions.append(session)
+            }
+        }
+
+        // Clean up removed screens (e.g. external display disconnected)
+        for oldSession in sessions {
+            if !currentDisplayIDs.contains(oldSession.displayID) {
+                print("[WallpaperEngine] Display \(oldSession.displayID) disconnected, cleaning up...")
+                oldSession.player?.pause()
+                oldSession.player?.removeAllItems()
+                oldSession.imageView?.animates = false
+                oldSession.window.orderOut(nil)
+            }
+        }
+
+        self.sessions = activeSessions
+        print("[WallpaperEngine] Active desktop sessions reconciled: \(sessions.count)")
+        notifyStateChange()
+    }
+
     public func setDesktopWallpaper(_ item: WallpaperItem, completion: ((Bool) -> Void)? = nil) {
         print("[WallpaperEngine] Setting Desktop wallpaper: \(item.title) (\(item.fileURL.lastPathComponent))")
         self.currentDesktopWallpaper = item
@@ -309,33 +363,7 @@ public final class WallpaperEngine: NSObject {
         UserDefaults.standard.set(item.id, forKey: "WallpaperEngine.desktopWallpaperId")
         UserDefaults.standard.set(item.title, forKey: "WallpaperEngine.desktopWallpaperTitle")
 
-        // Smoothly reuse existing windows or create new ones for new screens without destroying windows
-        var activeSessions: [ScreenSession] = []
-        let currentScreens = NSScreen.screens
-
-        for screen in currentScreens {
-            if let existing = sessions.first(where: { $0.screen == screen || $0.screen.frame == screen.frame }) {
-                updateSessionContent(session: existing, item: item)
-                activeSessions.append(existing)
-            } else {
-                let session = createSession(for: screen, item: item)
-                activeSessions.append(session)
-            }
-        }
-
-        // Clean up removed screens (e.g. external display disconnected)
-        for oldSession in sessions {
-            if !currentScreens.contains(where: { $0 == oldSession.screen || $0.frame == oldSession.screen.frame }) {
-                oldSession.player?.pause()
-                oldSession.player?.removeAllItems()
-                oldSession.imageView?.animates = false
-                oldSession.window.orderOut(nil)
-            }
-        }
-
-        self.sessions = activeSessions
-        print("[WallpaperEngine] Active desktop sessions: \(sessions.count)")
-        notifyStateChange()
+        reconcileDisplaySessions(for: item)
 
         // Sync native macOS Desktop & Mission Control spaces bar in background
         syncQueue.async { [weak self] in
@@ -376,31 +404,7 @@ public final class WallpaperEngine: NSObject {
         UserDefaults.standard.set(item.id, forKey: "WallpaperEngine.lockScreenWallpaperId")
         UserDefaults.standard.set(item.title, forKey: "WallpaperEngine.lockScreenWallpaperTitle")
 
-        var activeSessions: [ScreenSession] = []
-        let currentScreens = NSScreen.screens
-
-        for screen in currentScreens {
-            if let existing = sessions.first(where: { $0.screen == screen || $0.screen.frame == screen.frame }) {
-                updateSessionContent(session: existing, item: item)
-                activeSessions.append(existing)
-            } else {
-                let session = createSession(for: screen, item: item)
-                activeSessions.append(session)
-            }
-        }
-
-        for oldSession in sessions {
-            if !currentScreens.contains(where: { $0 == oldSession.screen || $0.frame == oldSession.screen.frame }) {
-                oldSession.player?.pause()
-                oldSession.player?.removeAllItems()
-                oldSession.imageView?.animates = false
-                oldSession.window.orderOut(nil)
-            }
-        }
-
-        self.sessions = activeSessions
-        print("[WallpaperEngine] Active desktop sessions: \(sessions.count)")
-        notifyStateChange()
+        reconcileDisplaySessions(for: item)
 
         syncQueue.async { [weak self] in
             let success = self?.syncNativeStore(for: item, target: .both) ?? false
@@ -606,7 +610,7 @@ public final class WallpaperEngine: NSObject {
 
     private func createSession(for screen: NSScreen, item: WallpaperItem) -> ScreenSession {
         let window = WallpaperWindow(screen: screen, level: layerMode.windowLevel)
-        let session = ScreenSession(screen: screen, window: window)
+        let session = ScreenSession(displayID: screen.displayID, screen: screen, window: window)
 
         if item.type == .video {
             let asset = AVURLAsset(url: item.fileURL)
@@ -635,16 +639,19 @@ public final class WallpaperEngine: NSObject {
             if isPlaying && !isSystemSleeping {
                 queuePlayer.play()
                 queuePlayer.rate = rate
-                print("[WallpaperEngine] Started queuePlayer playback on \(screen.localizedName), isMuted=\(isMuted), rate=\(rate)")
+                print("[WallpaperEngine] Started queuePlayer playback on \(screen.localizedName) (\(screen.frame)), isMuted=\(isMuted), rate=\(rate)")
             }
         } else {
             let imageView = NSImageView(frame: NSRect(origin: .zero, size: screen.frame.size))
             imageView.image = NSImage(contentsOf: item.fileURL)
             imageView.animates = true
+            imageView.wantsLayer = true
+            imageView.layer?.contentsGravity = (scalingMode == .aspectFill) ? .resizeAspectFill : .resizeAspect
             imageView.imageScaling = (scalingMode == .aspectFill) ? .scaleAxesIndependently : .scaleProportionallyUpOrDown
             imageView.autoresizingMask = [.width, .height]
             window.contentView = imageView
             session.imageView = imageView
+            print("[WallpaperEngine] Started image display on \(screen.localizedName) (\(screen.frame)): \(item.title)")
         }
 
         window.orderFrontRegardless()
@@ -652,6 +659,9 @@ public final class WallpaperEngine: NSObject {
     }
 
     private func updateSessionContent(session: ScreenSession, item: WallpaperItem) {
+        // Ensure geometry dynamically reflects the actual current screen frame
+        session.updateGeometry(for: session.screen)
+
         // 1. Clean up existing media safely
         session.player?.pause()
         session.player?.removeAllItems()
@@ -690,17 +700,19 @@ public final class WallpaperEngine: NSObject {
             if isPlaying && !isSystemSleeping {
                 queuePlayer.play()
                 queuePlayer.rate = rate
-                print("[WallpaperEngine] Swapped video playback on \(session.screen.localizedName) to: \(item.title), rate=\(rate)")
+                print("[WallpaperEngine] Swapped video playback on \(session.screen.localizedName) (\(session.screen.frame)) to: \(item.title), rate=\(rate)")
             }
         } else {
             let imageView = NSImageView(frame: NSRect(origin: .zero, size: session.screen.frame.size))
             imageView.image = NSImage(contentsOf: item.fileURL)
             imageView.animates = true
+            imageView.wantsLayer = true
+            imageView.layer?.contentsGravity = (scalingMode == .aspectFill) ? .resizeAspectFill : .resizeAspect
             imageView.imageScaling = (scalingMode == .aspectFill) ? .scaleAxesIndependently : .scaleProportionallyUpOrDown
             imageView.autoresizingMask = [.width, .height]
             session.window.contentView = imageView
             session.imageView = imageView
-            print("[WallpaperEngine] Swapped image display on \(session.screen.localizedName) to: \(item.title)")
+            print("[WallpaperEngine] Swapped image display on \(session.screen.localizedName) (\(session.screen.frame)) to: \(item.title)")
         }
 
         session.window.orderFrontRegardless()
@@ -741,8 +753,19 @@ public final class WallpaperEngine: NSObject {
         let gravity = scalingMode.avGravity
         for session in sessions {
             session.playerView?.videoGravity = gravity
+            session.imageView?.layer?.contentsGravity = (scalingMode == .aspectFill) ? .resizeAspectFill : .resizeAspect
             session.imageView?.imageScaling = (scalingMode == .aspectFill) ? .scaleAxesIndependently : .scaleProportionallyUpOrDown
         }
         notifyStateChange()
+    }
+}
+
+extension NSScreen {
+    public var displayID: CGDirectDisplayID {
+        let key = NSDeviceDescriptionKey("NSScreenNumber")
+        if let num = deviceDescription[key] as? NSNumber {
+            return CGDirectDisplayID(num.uint32Value)
+        }
+        return 0
     }
 }

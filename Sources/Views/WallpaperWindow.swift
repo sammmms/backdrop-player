@@ -45,4 +45,16 @@ public final class WallpaperWindow: NSWindow {
 
     public override var canBecomeKey: Bool { false }
     public override var canBecomeMain: Bool { false }
+
+    public override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
+        // Do not constrain or clamp window rect to primary screen;
+        // preserve the exact target screen frame coordinates across multi-monitor setups
+        return frameRect
+    }
+
+    public func updateFrame(to newFrame: NSRect) {
+        if self.frame != newFrame {
+            self.setFrame(newFrame, display: true)
+        }
+    }
 }
