@@ -126,6 +126,8 @@ public final class WallpaperDownloader: NSObject, ObservableObject, URLSessionDo
             try? FileManager.default.removeItem(at: rawStill)
         }
 
+        DownloadedMetadataStore.shared.remove(title: item.title)
+
         downloadProgress.removeValue(forKey: item.id)
         downloadStatus.removeValue(forKey: item.id)
 
@@ -358,6 +360,26 @@ public final class WallpaperDownloader: NSObject, ObservableObject, URLSessionDo
                 try? FileManager.default.removeItem(at: dest)
             }
             try FileManager.default.moveItem(at: location, to: dest)
+
+            // Save still image to .stills directory
+            if let thumb = taskInfo.item.thumbnailURL {
+                let stillsDir = BackdropLibraryService.shared.localWallpapersDirectory.appendingPathComponent(".stills")
+                try? FileManager.default.createDirectory(at: stillsDir, withIntermediateDirectories: true)
+                let safeTitle = taskInfo.item.title
+                    .replacingOccurrences(of: "/", with: "-")
+                    .replacingOccurrences(of: ":", with: "-")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                let stillDest = stillsDir.appendingPathComponent("\(safeTitle).jpg")
+                if !FileManager.default.fileExists(atPath: stillDest.path) {
+                    URLSession.shared.dataTask(with: thumb) { data, _, _ in
+                        if let d = data {
+                            try? d.write(to: stillDest)
+                        }
+                    }.resume()
+                }
+            }
+
+            DownloadedMetadataStore.shared.save(item: taskInfo.item)
 
             DispatchQueue.main.async {
                 self.downloadProgress.removeValue(forKey: taskInfo.item.id)

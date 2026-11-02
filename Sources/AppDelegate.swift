@@ -22,6 +22,12 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         dc.addObserver(
             self,
+            selector: #selector(handleShowDownloaded),
+            name: NSNotification.Name("com.cindori.BackdropPlayer.OpenDownloaded"),
+            object: nil
+        )
+        dc.addObserver(
+            self,
             selector: #selector(handleSetDesktopNotification(_:)),
             name: NSNotification.Name("com.cindori.BackdropPlayer.SetDesktop"),
             object: nil
@@ -45,6 +51,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
         if args.contains("--gallery") {
             GalleryWindowController.shared.show()
+        }
+
+        if args.contains("--downloaded") {
+            handleShowDownloaded()
         }
 
         if let idx = args.firstIndex(of: "--set-desktop"), idx + 1 < args.count {
@@ -86,6 +96,12 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func handleShowGallery() {
         DispatchQueue.main.async {
             GalleryWindowController.shared.show()
+        }
+    }
+
+    @objc private func handleShowDownloaded() {
+        DispatchQueue.main.async {
+            GalleryWindowController.shared.show(filterDownloaded: true)
         }
     }
 

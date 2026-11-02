@@ -27,13 +27,13 @@ public final class GalleryWindowController: NSWindowController, NSWindowDelegate
         fatalError("init(coder:) has not been implemented")
     }
 
-    public func show() {
-        print("[GalleryWindowController] Showing gallery window...")
+    public func show(filterDownloaded: Bool = false) {
+        print("[GalleryWindowController] Showing gallery window (filterDownloaded: \(filterDownloaded))...")
         NSApp.setActivationPolicy(.regular)
         guard let window = self.window else { return }
 
         // Re-create root view to refresh catalog if needed
-        window.contentView = NSHostingView(rootView: GalleryView())
+        window.contentView = NSHostingView(rootView: GalleryView(initialDownloadedOnly: filterDownloaded))
         window.makeKeyAndOrderFront(nil)
         window.orderFrontRegardless()
         NSApp.activate(ignoringOtherApps: true)

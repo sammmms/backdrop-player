@@ -187,9 +187,12 @@ public final class CatalogService {
         }
 
         // Multi-category filtering
-        if !categories.isEmpty {
+        if !categories.isEmpty && categories.count < Self.availableCategories.count {
             merged = merged.filter { item in
-                self.matchesAnyCategory(item: item, categories: categories)
+                if item.isLocalCopy && activeMarketplaces.contains("💾 Downloaded / Ready") {
+                    return true
+                }
+                return self.matchesAnyCategory(item: item, categories: categories)
             }
         }
 
@@ -197,12 +200,30 @@ public final class CatalogService {
     }
 
     public func matchesAnyCategory(item: CatalogItem, categories: Set<String>) -> Bool {
-        if categories.isEmpty { return true }
+        if categories.isEmpty || categories.count >= Self.availableCategories.count {
+            return true
+        }
+
+        // Downloaded / local user assets with generic or unclassified categories must always remain visible
+        if item.isLocalCopy && (
+            item.category == "Video Wallpaper" ||
+            item.category == "Image Wallpaper" ||
+            item.category == "Downloaded Asset" ||
+            item.category == "Backdrop Collection" ||
+            item.category.isEmpty
+        ) {
+            return true
+        }
+
         for cat in categories {
+            if item.category.localizedCaseInsensitiveContains(cat) {
+                return true
+            }
             let kw = categorySteamKeyword(for: cat).lowercased()
-            if item.category.localizedCaseInsensitiveContains(cat) ||
-               (!kw.isEmpty && item.category.localizedCaseInsensitiveContains(kw)) ||
-               (!kw.isEmpty && item.title.localizedCaseInsensitiveContains(kw)) {
+            if !kw.isEmpty && (
+                item.category.localizedCaseInsensitiveContains(kw) ||
+                item.title.localizedCaseInsensitiveContains(kw)
+            ) {
                 return true
             }
         }
@@ -361,6 +382,34 @@ public final class CatalogService {
         }
     }
 
+    // MARK: - Smart Category Inference for Uncategorized Assets
+
+    public static func inferCategory(for title: String) -> String? {
+        let t = title.lowercased()
+        if t.contains("cyberpunk") || t.contains("sci-fi") || t.contains("scifi") || t.contains("sift") || t.contains("robot") || t.contains("future") {
+            return "Sci-Fi & Cyberpunk"
+        }
+        if t.contains("kirby") || t.contains("game") || t.contains("gaming") || t.contains("zelda") || t.contains("mario") || t.contains("pokemon") {
+            return "Gaming"
+        }
+        if t.contains("nature") || t.contains("forest") || t.contains("pond") || t.contains("tree") || t.contains("frog") || t.contains("bambi") || t.contains("animal") || t.contains("sky") || t.contains("lake") || t.contains("ocean") {
+            return "Nature & Space"
+        }
+        if t.contains("lofi") || t.contains("aesthetic") || t.contains("relax") || t.contains("cozy") || t.contains("cat") {
+            return "Lofi & Aesthetic"
+        }
+        if t.contains("car") || t.contains("vehicle") || t.contains("drift") || t.contains("drive") || t.contains("speed") {
+            return "Cars & Vehicles"
+        }
+        if t.contains("fantasy") || t.contains("dark") || t.contains("queen") || t.contains("castle") || t.contains("dragon") || t.contains("magic") {
+            return "Fantasy & Abstract"
+        }
+        if t.contains("anime") || t.contains("manga") || t.contains("edgerunner") || t.contains("lucy") {
+            return "Anime & Manga"
+        }
+        return nil
+    }
+
     // MARK: - Downloaded Wallpapers Scanner
 
     public func fetchDownloadedItems(matching query: String = "") -> [CatalogItem] {
@@ -392,18 +441,64 @@ public final class CatalogService {
                 ? String(format: "%.1f MB", Double(size) / (1024 * 1024))
                 : String(format: "%d KB", size / 1024)
 
-            // Look for still image
+            // Look for still image with title variants (handling : vs -)
             var thumbURL: URL? = nil
-            for sExt in ["jpg", "png", "heic"] {
-                let candidate = stillsDir.appendingPathComponent("\(title).\(sExt)")
-                if FileManager.default.fileExists(atPath: candidate.path) {
-                    thumbURL = candidate
-                    break
+            let titleVariants = [
+                title,
+                title.replacingOccurrences(of: "-", with: ":"),
+                title.replacingOccurrences(of: ":", with: "-"),
+                title.replacingOccurrences(of: " - ", with: ": "),
+                title.replacingOccurrences(of: ": ", with: " - ")
+            ]
+            for candidateTitle in titleVariants {
+                for sExt in ["jpg", "png", "heic", "jpeg"] {
+                    let candidate = stillsDir.appendingPathComponent("\(candidateTitle).\(sExt)")
+                    if FileManager.default.fileExists(atPath: candidate.path) {
+                        thumbURL = candidate
+                        break
+                    }
                 }
+                if thumbURL != nil { break }
             }
 
-            // Check if catalog item exists in online/seed catalog
-            if let existing = fetchCatalog().first(where: { $0.title.lowercased() == lowerTitle }) {
+            // 1. Check if metadata exists in DownloadedMetadataStore
+            if let meta = DownloadedMetadataStore.shared.get(title: title) {
+                results.append(
+                    CatalogItem(
+                        id: meta.id,
+                        title: meta.title,
+                        category: meta.category,
+                        thumbnailURL: thumbURL ?? fileURL,
+                        previewURL: fileURL,
+                        downloadURL: fileURL,
+                        resolution: meta.resolution,
+                        fileSizeString: sizeStr,
+                        sourceDescription: meta.sourceDescription,
+                        isLocalCopy: true
+                    )
+                )
+                continue
+            }
+
+            // 2. Check if catalog item exists in online/seed catalog
+            let normalizedTitle = title
+                .replacingOccurrences(of: "-", with: " ")
+                .replacingOccurrences(of: ":", with: " ")
+                .lowercased()
+                .trimmingCharacters(in: .whitespaces)
+
+            let matchedCatalog = fetchCatalog().first(where: {
+                let norm = $0.title
+                    .replacingOccurrences(of: "-", with: " ")
+                    .replacingOccurrences(of: ":", with: " ")
+                    .lowercased()
+                    .trimmingCharacters(in: .whitespaces)
+                return norm == normalizedTitle || $0.title.lowercased() == lowerTitle
+            })
+
+            let isVid = ["mov", "mp4", "m4v", "webm"].contains(ext)
+
+            if let existing = matchedCatalog {
                 results.append(
                     CatalogItem(
                         id: existing.id,
@@ -419,12 +514,12 @@ public final class CatalogService {
                     )
                 )
             } else {
-                let isVid = ["mov", "mp4", "m4v", "webm"].contains(ext)
+                let inferredCat = Self.inferCategory(for: title) ?? (isVid ? "Video Wallpaper" : "Image Wallpaper")
                 results.append(
                     CatalogItem(
                         id: "downloaded-\(title)",
                         title: title,
-                        category: isVid ? "Video Wallpaper" : "Image Wallpaper",
+                        category: inferredCat,
                         thumbnailURL: thumbURL ?? fileURL,
                         previewURL: fileURL,
                         downloadURL: fileURL,

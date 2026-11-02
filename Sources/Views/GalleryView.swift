@@ -23,6 +23,14 @@ public struct GalleryView: View {
     // Applying state per wallpaper item (e.g. "desktop", "lockScreen", "both")
     @State private var applyingItemIds: [String: String] = [:]
 
+    public init(initialDownloadedOnly: Bool = false) {
+        if initialDownloadedOnly {
+            _selectedMarketplaces = State(initialValue: ["💾 Downloaded / Ready"])
+        } else {
+            _selectedMarketplaces = State(initialValue: Set(CatalogService.availableMarketplaces.filter { $0 != "🔗 Custom Video URL" }))
+        }
+    }
+
     // Right Inspector Sidebar state
     @State private var isInspectorVisible: Bool = true
     // 0 = Desktop, 1 = Lock Screen, 2 = Selected Wallpaper
@@ -95,6 +103,12 @@ public struct GalleryView: View {
             refreshTrigger = UUID()
             syncRatesFromEngine()
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("ShowDownloadedWallpapers"))) { _ in
+            selectedMarketplaces = ["💾 Downloaded / Ready"]
+            selectedCategories = Set(categories)
+            searchText = ""
+            performLiveMultiSearch(query: "", marketplaces: ["💾 Downloaded / Ready"], categories: Set(categories))
+        }
     }
 
     private func syncRatesFromEngine() {
@@ -124,7 +138,9 @@ public struct GalleryView: View {
                 // Quick Access Downloaded Wallpapers
                 Button(action: {
                     selectedMarketplaces = ["💾 Downloaded / Ready"]
-                    performLiveMultiSearch(query: searchText, marketplaces: selectedMarketplaces, categories: selectedCategories)
+                    selectedCategories = Set(categories)
+                    searchText = ""
+                    performLiveMultiSearch(query: "", marketplaces: ["💾 Downloaded / Ready"], categories: Set(categories))
                 }) {
                     HStack(spacing: 6) {
                         Image(systemName: "internaldrive.fill")
@@ -349,7 +365,10 @@ public struct GalleryView: View {
                         .font(.system(size: 10, weight: .medium))
                         .foregroundColor(.secondary)
                 } else {
-                    Text("\(items.count) online")
+                    let countLabel = selectedMarketplaces == ["💾 Downloaded / Ready"]
+                        ? "\(items.count) downloaded"
+                        : "\(items.count) online"
+                    Text(countLabel)
                         .font(.system(size: 10, weight: .medium))
                         .foregroundColor(.secondary)
                 }
